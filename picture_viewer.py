@@ -1,6 +1,7 @@
 """Keyboard-driven viewer for an ordered list of original photos."""
 from pathlib import Path
 import tkinter as tk
+from tkinter import ttk
 
 from PIL import Image, ImageOps, ImageTk
 
@@ -42,14 +43,26 @@ class PictureViewer:
         self.paths = paths
         self.index = paths.index(selected)
         self.window = tk.Toplevel(parent)
-        self.window.geometry(f"{parent.winfo_width()}x{parent.winfo_height()}{parent.winfo_rootx():+d}{parent.winfo_rooty():+d}")
-        if parent.tk.getboolean(parent.attributes("-fullscreen")):
+        width, height = parent.winfo_width(), parent.winfo_height()
+        x, y = parent.winfo_rootx(), parent.winfo_rooty()
+        fullscreen = parent.tk.getboolean(parent.attributes("-fullscreen"))
+        maximized = parent.state() == "zoomed"
+        if fullscreen or maximized:
+            # Give an initially enlarged viewer a useful normal-size restore rectangle.
+            x += width // 10
+            y += height // 10
+            width, height = width * 4 // 5, height * 4 // 5
+        self.window.geometry(f"{width}x{height}{x:+d}{y:+d}")
+        if fullscreen:
             self.window.attributes("-fullscreen", True)
-        elif parent.state() == "zoomed":
+        elif maximized:
             self.window.state("zoomed")
-        self.window.transient(parent)
         self.canvas = tk.Canvas(self.window, background="#151719", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
+        self.size_button = ttk.Button(self.window, command=self.toggle_size)
+        self.size_button.place(relx=1, x=-10, y=10, anchor="ne")
+        self.sync_size_button()
+        self.window.bind("<Configure>", self.sync_size_button)
         self.image = None
         self.bitmap = None
         self.drag = None
@@ -67,6 +80,24 @@ class PictureViewer:
         self.window.grab_set()
         self.canvas.focus_set()
         self.load()
+
+    def enlarged(self):
+        return self.window.tk.getboolean(self.window.attributes("-fullscreen")) or self.window.state() == "zoomed"
+
+    def sync_size_button(self, event=None):
+        if event is None or event.widget is self.window:
+            text = "Restore" if self.enlarged() else "Maximize"
+            if self.size_button.cget("text") != text:
+                self.size_button.configure(text=text)
+
+    def toggle_size(self):
+        if self.enlarged():
+            self.window.attributes("-fullscreen", False)
+            self.window.state("normal")
+        else:
+            self.window.state("zoomed")
+        self.sync_size_button()
+        self.canvas.focus_set()
 
     def close(self, event=None):
         if self.job is not None:
