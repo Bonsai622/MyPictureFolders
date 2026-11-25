@@ -52,6 +52,7 @@ def connect(home):
     home.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(home / "media.sqlite", timeout=15)
     db.row_factory = sqlite3.Row
+    db.create_function("model_key", 1, lambda name: person_name(name or "").casefold(), deterministic=True)
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA foreign_keys=ON")
     db.execute("PRAGMA synchronous=NORMAL")
@@ -252,7 +253,7 @@ if __name__ == "__main__" and "--scan" in sys.argv:
 
 
 def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, parent="", sort="Folder name", offset=0, photo_paths=False):
-    albums = view == "Folders"
+    albums = view in ("Models", "Folders")
     table = "albums" if albums else "media"
     where = ["m.root=?"]
     args = [root]
@@ -263,11 +264,14 @@ def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, p
         where.append("m.kind=?")
         args.append(view[:-1])
     if person:
-        where.append("m.person=?")
-        args.append(person)
+        where.append("model_key(m.person)=?")
+        args.append(person_name(person).casefold())
     if favorites:
         path_column = "m.path" if albums else "m.parent"
-        where.append(f"EXISTS(SELECT 1 FROM favorites f WHERE f.kind='folder' AND f.name={path_column})")
+        if view == "Models":
+            where.append("EXISTS(SELECT 1 FROM favorites f WHERE f.kind='model' AND f.name=model_key(m.person))")
+        else:
+            where.append(f"EXISTS(SELECT 1 FROM favorites f WHERE f.kind='folder' AND f.name={path_column})")
     if tag:
         if albums:
             where.append("EXISTS(SELECT 1 FROM album_tags t WHERE t.id=m.id AND t.tag=?)")
@@ -277,6 +281,20 @@ def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, p
                 EXISTS(SELECT 1 FROM albums a JOIN album_tags t ON t.id=a.id
                 WHERE a.root=m.root AND a.path=m.parent AND t.tag=?))""")
             args.extend([tag,tag])
+    if view == "Models":
+        where.append("model_key(m.person)<>''")
+        representatives = db.execute("SELECT MIN(m.id) FROM albums m WHERE " + " AND ".join(where)
+            + " GROUP BY model_key(m.person) ORDER BY model_key(m.person) LIMIT 101 OFFSET ?", args+[offset])
+        rows = []
+        for (album_id,) in representatives.fetchall():
+            album = db.execute("SELECT * FROM albums WHERE id=?", (album_id,)).fetchone()
+            name = person_name(album["person"])
+            marked = db.execute("SELECT 1 FROM favorites WHERE kind='model' AND name=?", (name.casefold(),)).fetchone()
+            preview = db.execute("SELECT id FROM media WHERE root=? AND parent=? ORDER BY name,id LIMIT 1",
+                                 (root,album["path"])).fetchone()
+            rows.append(dict(id=album_id, name=name, path="", person=name, kind="Model",
+                             favorite=bool(marked), preview=preview[0] if preview else None))
+        return rows
     order = ("m.name,m.id" if albums else "m.folder,m.name,m.id")
     if sort == "Person":
         order = "m.person," + order
@@ -308,7 +326,7 @@ def show_catalog(browser):
     bar = ttk.Frame(win, padding=5)
     bar.pack(fill="x")
     state = {"page":0, "parent":"", "selected":None, "status":None}
-    view = tk.StringVar(value="Folders")
+    view = tk.StringVar(value="Models")
     person = tk.StringVar()
     tag = tk.StringVar()
     favorites = tk.BooleanVar()
@@ -347,7 +365,7 @@ def show_catalog(browser):
         page_label.configure(text=f"Page {state['page']+1}")
         if not rows:
             ttk.Label(grid,text="No matches yet. Choose a watch folder or change the filters.",padding=16).grid()
-        folder_view = view.get() == "Folders"
+        folder_view = view.get() in ("Models", "Folders")
         preview_size = (131, 96) if folder_view else (98, 72)
         columns = 6 if folder_view else 8
         tile_width = 20 if folder_view else 15
@@ -374,12 +392,21 @@ def show_catalog(browser):
 
     def select(row):
         state["selected"] = row
+        if row["kind"] == "Model":
+            selection.set(row["name"])
+            return
         table = "album_tags" if row["kind"]=="Folder" else "tags"
         labels = ", ".join(r[0] for r in db.execute(f"SELECT tag FROM {table} WHERE id=? ORDER BY tag",(row["id"],)))
         selection.set("   ·   ".join(part for part in (row["path"],row["person"],labels) if part))
 
     def open_item(row):
-        if row["kind"]=="Folder":
+        if row["kind"] == "Model":
+            state["model_parent"] = (person.get(), favorites.get(), state["page"])
+            person.set(row["person"])
+            favorites.set(False)
+            view.set("Folders")
+            refresh(True)
+        elif row["kind"]=="Folder":
             state["parent"] = row["path"]
             view.set("All media")
             refresh(True)
@@ -393,14 +420,15 @@ def show_catalog(browser):
 
     def favorite():
         row = state["selected"]
-        if not row or row["kind"]!="Folder":
+        if not row or row["kind"] not in ("Folder","Model"):
             return messagebox.showinfo("Favorite folder","Select a folder tile first.",parent=win)
-        set_favorite(db,"folder",row["path"],not row["favorite"])
+        kind, key = ("model",row["name"].casefold()) if row["kind"]=="Model" else ("folder",row["path"])
+        set_favorite(db,kind,key,not row["favorite"])
         refresh()
 
     def edit_tags():
         row = state["selected"]
-        if not row:
+        if not row or row["kind"]=="Model":
             return messagebox.showinfo("Tags","Select a folder, photo or video first.",parent=win)
         table = "album_tags" if row["kind"]=="Folder" else "tags"
         old = ", ".join(r[0] for r in db.execute(f"SELECT tag FROM {table} WHERE id=? ORDER BY tag",(row["id"],)))
@@ -429,6 +457,10 @@ def show_catalog(browser):
         refresh(True)
 
     def switch_view(*args):
+        previous = state.pop("model_parent", None)
+        if previous:
+            person.set(previous[0])
+            favorites.set(previous[1])
         state["parent"] = ""
         refresh(True)
 
@@ -440,7 +472,7 @@ def show_catalog(browser):
                            ("Toggle favorite",favorite)]:
         ttk.Button(bar,text=caption,command=action).pack(side="left",padx=2)
     ttk.Label(bar,textvariable=info).pack(side="left",padx=8)
-    for label,var,choices in [("View",view,("Folders","All media","Photos","Videos")),
+    for label,var,choices in [("View",view,("Models","Folders","All media","Photos","Videos")),
                               ("Sort",sort,("Folder name","Person","File name"))]:
         ttk.Label(tools,text=label).pack(side="left",padx=4)
         box = ttk.Combobox(tools,textvariable=var,values=choices,state="readonly",width=12)
@@ -489,6 +521,12 @@ def show_catalog(browser):
             state["parent"] = ""
             view.set("Folders")
             refresh(True)
+        elif "model_parent" in state:
+            old_person, old_favorite, state["page"] = state.pop("model_parent")
+            person.set(old_person)
+            favorites.set(old_favorite)
+            view.set("Models")
+            refresh()
         else:
             close()
         return "break"

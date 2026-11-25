@@ -362,7 +362,7 @@ class Browser:
         self.dates.clear()
         self.directory_flags.clear()
         self.entries, self.folder, self.page = entries, folder, 0
-        if folder and any(re.search(r"\d", p.name) and person_name(p.name) and p.is_dir() for p in entries):
+        if any(re.search(r"\d", p.name) and person_name(p.name) and p.is_dir() for p in entries):
             self.group_by_model()
         else:
             self.draw()
