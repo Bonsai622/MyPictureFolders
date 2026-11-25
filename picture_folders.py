@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -16,7 +17,14 @@ from PIL import Image, ImageDraw, ImageOps, ImageTk
 META = ".mypicturefolders.json"
 PICTURES = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico"}
 DEFAULT = {"title": "", "color": "#dbb675", "x": 50, "y": 50, "width": 100, "height": 100}
-PAGE = 20
+PAGE = 100
+
+
+def grid_layout(count, width, height):
+    # The full page fits the viewport. Wide windows get more columns.
+    columns = max(1, min(count, round(math.sqrt(count * width / (height * 1.55)))))
+    rows = max(1, math.ceil(count / columns))
+    return columns, min(200, width // columns), min(155, height // rows)
 
 
 def settings(folder):
@@ -92,7 +100,8 @@ class Browser:
         self.db.execute("CREATE TABLE IF NOT EXISTS folders(path TEXT PRIMARY KEY COLLATE NOCASE)")
         self.folder = None
         self.page = 0
-        self.images = []
+        self.tiles = []
+        self.layout_job = None
         self.pending = []
         for arg in incoming:
             p = Path(arg).absolute()
@@ -117,7 +126,7 @@ class Browser:
         self.grid = ttk.Frame(self.canvas)
         self.window = self.canvas.create_window(0, 0, window=self.grid, anchor="nw")
         self.grid.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.window, width=e.width))
+        self.canvas.bind("<Configure>", self.schedule_layout)
         root.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-int(e.delta/120), "units"))
         footer = ttk.Frame(root, padding=6)
         footer.pack(fill="x")
@@ -217,16 +226,37 @@ class Browser:
         self.entries, self.folder, self.page = entries, folder, 0
         self.draw()
 
+    def schedule_layout(self, event=None):
+        if self.layout_job is not None:
+            self.root.after_cancel(self.layout_job)
+        self.layout_job = self.root.after(70, self.layout_tiles)
+
+    def layout_tiles(self):
+        self.layout_job = None
+        width, height = self.canvas.winfo_width(), self.canvas.winfo_height()
+        if width < 10 or height < 10:
+            return
+        self.canvas.itemconfigure(self.window, width=width)
+        columns, cell_w, cell_h = grid_layout(len(self.tiles), width, height)
+        for i, (card, button, source, title) in enumerate(self.tiles):
+            card.grid(row=i//columns, column=i%columns)
+            card.configure(width=cell_w, height=cell_h)
+            chars = max(3, (cell_w-14)//8)
+            button.configure(text=title if len(title)<=chars else title[:chars-1]+"…")
+            if source is not None:
+                image = source.copy()
+                image.thumbnail((max(1, cell_w-12), max(1, cell_h-28)), Image.Resampling.LANCZOS)
+                button.bitmap = ImageTk.PhotoImage(image)
+                button.configure(image=button.bitmap)
+
     def draw(self):
         for widget in self.grid.winfo_children():
             widget.destroy()
-        self.images.clear()
+        self.tiles.clear()
         self.location.configure(text=str(self.folder or "My folders"))
         start = self.page * PAGE
         for i, path in enumerate(self.entries[start:start+PAGE]):
-            card = ttk.Frame(self.grid, padding=5)
-            card.grid(row=i//4, column=i%4, sticky="n", padx=3, pady=4)
-            self.grid.columnconfigure(i%4, weight=1)
+            card = ttk.Frame(self.grid)
             directory = path.is_dir()
             title = path.name or str(path)
             art = None
@@ -241,20 +271,21 @@ class Browser:
                 art = None
             if art is not None:
                 art.thumbnail((128, 100), Image.Resampling.LANCZOS)
-                bitmap = ImageTk.PhotoImage(art)
-                self.images.append(bitmap)
-            else:
-                bitmap = ""
             action = self.enter if directory else os.startfile
-            ttk.Button(card, image=bitmap, text=title if len(title)<=22 else title[:19]+"…",
-                       compound="top", command=lambda p=path, fn=action: fn(p)).pack()
+            button = ttk.Button(card, compound="top", command=lambda p=path, fn=action: fn(p))
+            button.place(x=1, y=1, relwidth=1, relheight=1, width=-2, height=-2)
+            button.bind("<Enter>", lambda e, p=path: self.location.configure(text=str(p)))
+            button.bind("<Leave>", lambda e: self.location.configure(text=str(self.folder or "My folders")))
             if directory:
-                ttk.Button(card, text="Edit cover", command=lambda p=path: self.editor(p)).pack()
+                edit = ttk.Button(card, text="✎", width=2, command=lambda p=path: self.editor(p))
+                edit.place(relx=1, x=-2, y=2, anchor="ne")
+            self.tiles.append((card, button, art, title))
+        self.schedule_layout()
         if not self.entries:
             ttk.Label(self.grid, text="Open or create a folder to begin." if not self.folder else "This folder is empty.", padding=18).grid()
         self.prev.configure(state="normal" if start else "disabled")
         self.next.configure(state="normal" if start+PAGE<len(self.entries) else "disabled")
-        self.count.configure(text=f"{len(self.entries)} items  •  Page {self.page+1}")
+        self.count.configure(text=f"{start+1 if self.entries else 0}–{min(start+PAGE,len(self.entries))} of {len(self.entries)} items")
         self.canvas.yview_moveto(0)
 
     def editor(self, folder):
