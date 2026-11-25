@@ -12,7 +12,7 @@ import tempfile
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
-from media_catalog import show_catalog
+from media_catalog import person_name, show_catalog
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 META = ".mypicturefolders.json"
@@ -113,8 +113,8 @@ class Browser:
         self.bar.pack(fill="x")
         for title, action in [("Media catalog", lambda: show_catalog(self)), ("Library", self.home), ("Up", self.up), ("Open folder…", self.browse),
                               ("New folder…", self.create), ("Add files…", self.add_files),
-                              ("Edit cover…", self.edit_current)]:
-            ttk.Button(self.bar, text=title, command=action).pack(side="left", padx=2)
+                              ("Edit cover…", self.edit_current), ("Sort by Model", self.sort_by_model)]:
+            ttk.Button(self.bar, text=title, width=0, command=action).pack(side="left", padx=2)
         self.location = ttk.Label(root, padding=(12, 4))
         self.location.pack(fill="x")
         area = ttk.Frame(root)
@@ -211,6 +211,18 @@ class Browser:
             self.editor(self.folder)
         else:
             messagebox.showinfo("Edit cover", "Open a folder or use its Edit cover button.")
+
+    def sort_by_model(self):
+        def sort_key(path):
+            name = path.name.casefold()
+            if self.folder is not None and not path.is_dir():
+                return (2, "", name)
+            model = person_name(name)
+            return (0 if model else 1, model, name)
+
+        self.entries.sort(key=sort_key)
+        self.page = 0
+        self.draw()
 
     def turn(self, step):
         self.page += step
