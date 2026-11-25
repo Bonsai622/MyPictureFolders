@@ -283,18 +283,18 @@ def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, p
             args.extend([tag,tag])
     if view == "Models":
         where.append("model_key(m.person)<>''")
-        representatives = db.execute("SELECT MIN(m.id) FROM albums m WHERE " + " AND ".join(where)
-            + " GROUP BY model_key(m.person) ORDER BY model_key(m.person) LIMIT 101 OFFSET ?", args+[offset])
-        rows = []
-        for (album_id,) in representatives.fetchall():
-            album = db.execute("SELECT * FROM albums WHERE id=?", (album_id,)).fetchone()
-            name = person_name(album["person"])
-            marked = db.execute("SELECT 1 FROM favorites WHERE kind='model' AND name=?", (name.casefold(),)).fetchone()
-            preview = db.execute("SELECT id FROM media WHERE root=? AND parent=? ORDER BY name,id LIMIT 1",
-                                 (root,album["path"])).fetchone()
-            rows.append(dict(id=album_id, name=name, path="", person=name, kind="Model",
-                             favorite=bool(marked), preview=preview[0] if preview else None))
-        return rows
+        # Fetch model metadata for the whole scrollable list. JPEG blobs are loaded
+        # separately, for just the visible rows.
+        sql = """WITH models AS (SELECT MIN(m.id) AS id, model_key(m.person) AS key
+                 FROM albums m WHERE """ + " AND ".join(where) + """
+                 GROUP BY key)
+                 SELECT a.id,a.person,
+                 EXISTS(SELECT 1 FROM favorites f WHERE f.kind='model' AND f.name=g.key) AS favorite,
+                 (SELECT id FROM media WHERE root=a.root AND parent=a.path ORDER BY name,id LIMIT 1) AS preview
+                 FROM models g JOIN albums a ON a.id=g.id ORDER BY g.key"""
+        return [dict(id=row["id"], name=person_name(row["person"]), person=person_name(row["person"]),
+                     kind="Model", path="", favorite=row["favorite"], preview=row["preview"])
+                for row in db.execute(sql,args)]
     order = ("m.name,m.id" if albums else "m.folder,m.name,m.id")
     if sort == "Person":
         order = "m.person," + order
@@ -307,6 +307,18 @@ def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, p
                                           + f" AND m.kind='Photo' ORDER BY {order}", args)]
     return db.execute(f"SELECT m.id,m.name,m.path,m.person,{columns} FROM {table} m WHERE "
                       + " AND ".join(where) + f" ORDER BY {order} LIMIT 101 OFFSET ?", args+[offset]).fetchall()
+
+
+MODEL_TILE_HEIGHT = 246
+
+
+def model_viewport(count, width, height, top):
+    columns = max(1, width // 292)
+    row_count = (count + columns - 1) // columns
+    top = min(max(0, int(top)), max(0, row_count * MODEL_TILE_HEIGHT - height))
+    first = max(0, top // MODEL_TILE_HEIGHT - 1)
+    stop = min(row_count, (top + height + MODEL_TILE_HEIGHT - 1) // MODEL_TILE_HEIGHT + 1)
+    return columns, first * columns, min(count, stop * columns), row_count * MODEL_TILE_HEIGHT
 
 
 def show_catalog(browser):
@@ -346,11 +358,65 @@ def show_catalog(browser):
     area.configure(yscrollcommand=scroll.set)
     grid = ttk.Frame(area)
     grid_id = area.create_window(0,0,anchor="nw",window=grid)
-    grid.bind("<Configure>",lambda e: area.configure(scrollregion=area.bbox("all")))
-    area.bind("<Configure>",lambda e: area.itemconfigure(grid_id,width=e.width))
+    model_rows = []
+    model_slice = None
+    layout_job = None
     photos = []
 
+    def render_models():
+        nonlocal layout_job, model_slice
+        layout_job = None
+        if view.get() != "Models":
+            return
+        w, h = area.winfo_width(), area.winfo_height()
+        if w < 2 or h < 2:
+            return
+        restore = state.pop("restore_scroll", None)
+        if restore is not None:
+            total = model_viewport(len(model_rows), w, h, 0)[3]
+            area.configure(scrollregion=(0,0,w,max(total,h)))
+            area.yview_moveto(restore)
+        cols, start, stop, total = model_viewport(len(model_rows), w, h, area.canvasy(0))
+        signature = (w, h, start, stop)
+        if signature == model_slice:
+            return
+        model_slice = signature
+        area.configure(scrollregion=(0, 0, w, max(total,h)))
+        area.coords(grid_id, 0, (start // cols) * MODEL_TILE_HEIGHT)
+        area.itemconfigure(grid_id, width=w, height=max(34, ((stop-start+cols-1)//cols)*MODEL_TILE_HEIGHT))
+        for child in grid.winfo_children():
+            child.destroy()
+        photos.clear()
+        if not model_rows:
+            ttk.Label(grid,text="No matching models.",padding=12).pack()
+            return
+        for i,row in enumerate(model_rows[start:stop]):
+            tile = make_tile(row, (262,192), 0, enlarge=True)
+            y, x = divmod(i, cols)
+            left, right = x*w//cols, (x+1)*w//cols
+            tile.place(x=left+2,y=y*MODEL_TILE_HEIGHT+2,width=right-left-4,height=MODEL_TILE_HEIGHT-4)
+
+    def queue_layout(*args):
+        nonlocal layout_job
+        if view.get() == "Models" and layout_job is None:
+            layout_job = win.after_idle(render_models)
+
+    def scrolling(first,last):
+        scroll.set(first,last)
+        queue_layout()
+
+    def resize(event):
+        if view.get() == "Models":
+            queue_layout()
+        else:
+            area.itemconfigure(grid_id,width=event.width)
+
+    grid.bind("<Configure>",lambda e: area.configure(scrollregion=area.bbox("all")) if view.get() != "Models" else None)
+    area.bind("<Configure>",resize)
+    area.configure(yscrollcommand=scrolling)
+
     def refresh(reset=False):
+        nonlocal model_rows, model_slice
         if reset:
             state["page"] = 0
         state["selected"] = None
@@ -360,6 +426,20 @@ def show_catalog(browser):
         photos.clear()
         rows = catalog_page(db,option(db,"root"),view.get(),person.get().strip(),tag.get().strip(),
                             favorites.get(),state["parent"],sort.get(),state["page"]*100)
+        if view.get() == "Models":
+            model_rows = rows
+            model_slice = None
+            prev.pack_forget()
+            nxt.pack_forget()
+            page_label.configure(text=f"{len(rows):,} models")
+            if reset:
+                area.yview_moveto(0)
+            queue_layout()
+            return
+        prev.pack(side="left",before=page_label)
+        nxt.pack(side="left",after=page_label)
+        area.coords(grid_id,0,0)
+        area.itemconfigure(grid_id,width=area.winfo_width(),height=0)
         prev.configure(state="normal" if state["page"] else "disabled")
         nxt.configure(state="normal" if len(rows)>100 else "disabled")
         page_label.configure(text=f"Page {state['page']+1}")
@@ -370,20 +450,27 @@ def show_catalog(browser):
         columns = 6 if folder_view else 8
         tile_width = 20 if folder_view else 15
         for i,row in enumerate(rows[:100]):
-            cached = db.execute("SELECT jpg FROM previews WHERE id=?", (row["preview"],)).fetchone()
-            image = ""
-            if cached and cached[0]:
-                with Image.open(io.BytesIO(cached[0])) as preview:
-                    preview.thumbnail(preview_size)
-                    image = ImageTk.PhotoImage(preview)
-                    photos.append(image)
-            text = ("♥ " if row["favorite"] else "") + ("▶ " if row["kind"]=="Video" else "") + row["name"]
-            tile = ttk.Button(grid,text=text[:20],image=image,compound="top",width=tile_width,
-                              command=lambda r=row: click_tile(r))
+            tile = make_tile(row, preview_size, tile_width)
             tile.grid(row=i//columns,column=i%columns,padx=1,pady=1,sticky="nsew")
-            if row["kind"] != "Photo":
-                tile.bind("<Double-Button-1>",lambda e,r=row: open_item(r))
         area.yview_moveto(0)
+
+    def make_tile(row, preview_size, tile_width, enlarge=False):
+        cached = db.execute("SELECT jpg FROM previews WHERE id=?", (row["preview"],)).fetchone()
+        image = ""
+        if cached and cached[0]:
+            with Image.open(io.BytesIO(cached[0])) as preview:
+                if enlarge:
+                    preview = ImageOps.contain(preview, preview_size, Image.Resampling.LANCZOS)
+                else:
+                    preview.thumbnail(preview_size)
+                image = ImageTk.PhotoImage(preview)
+                photos.append(image)
+        text = ("♥ " if row["favorite"] else "") + ("▶ " if row["kind"]=="Video" else "") + row["name"]
+        tile = ttk.Button(grid,text=text if enlarge else text[:20],image=image,compound="top",width=tile_width,
+                          command=lambda r=row: click_tile(r))
+        if row["kind"] != "Photo":
+            tile.bind("<Double-Button-1>",lambda e,r=row: open_item(r))
+        return tile
 
     def click_tile(row):
         select(row)
@@ -401,7 +488,7 @@ def show_catalog(browser):
 
     def open_item(row):
         if row["kind"] == "Model":
-            state["model_parent"] = (person.get(), favorites.get(), state["page"])
+            state["model_parent"] = (person.get(), favorites.get(), area.yview()[0])
             person.set(row["person"])
             favorites.set(False)
             view.set("Folders")
@@ -513,6 +600,8 @@ def show_catalog(browser):
 
     def close():
         win.after_cancel(state["timer"])
+        if layout_job is not None:
+            win.after_cancel(layout_job)
         db.close()
         win.destroy()
 
@@ -522,7 +611,7 @@ def show_catalog(browser):
             view.set("Folders")
             refresh(True)
         elif "model_parent" in state:
-            old_person, old_favorite, state["page"] = state.pop("model_parent")
+            old_person, old_favorite, state["restore_scroll"] = state.pop("model_parent")
             person.set(old_person)
             favorites.set(old_favorite)
             view.set("Models")
@@ -532,6 +621,8 @@ def show_catalog(browser):
         return "break"
 
     def wheel_page(step):
+        if view.get() == "Models":
+            return
         button = nxt if step > 0 else prev
         if button.instate(["!disabled"]):
             turn(step)
