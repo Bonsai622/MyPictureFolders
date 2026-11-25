@@ -7,13 +7,16 @@
     FolderPicture.ps1 -Set    -Folder <path>   pick a picture and make it that folder's icon
     FolderPicture.ps1 -Set    -Folder <path> -Picture <file>   same, without the file picker
     FolderPicture.ps1 -Remove -Folder <path>   put the normal folder icon back
+    Several folders can follow -Folder (that is what "Send to" passes when you select
+    more than one); -Set then asks for one picture and puts it on all of them.
 
   How it works: the picture is converted to a multi-size .ico saved (hidden) inside the
   folder, and the folder's desktop.ini gets an IconResource line pointing at it - the same
   mechanism as Properties > Customize > Change Icon. Nothing is installed system-wide; the
   menu lives under HKEY_CURRENT_USER, so no admin rights are needed.
 #>
-[CmdletBinding(DefaultParameterSetName = 'Set')]
+# PositionalBinding off: extra folder paths from Send to must land in $MoreFolders, not $Picture.
+[CmdletBinding(DefaultParameterSetName = 'Set', PositionalBinding = $false)]
 param(
   [Parameter(ParameterSetName = 'Install', Mandatory)]   [switch] $Install,
   [Parameter(ParameterSetName = 'Uninstall', Mandatory)] [switch] $Uninstall,
@@ -22,6 +25,8 @@ param(
   [Parameter(ParameterSetName = 'Set', Mandatory)]
   [Parameter(ParameterSetName = 'Remove', Mandatory)]    [string] $Folder,
   [Parameter(ParameterSetName = 'Set')]                  [string] $Picture,
+  [Parameter(ParameterSetName = 'Set', ValueFromRemainingArguments)]
+  [Parameter(ParameterSetName = 'Remove', ValueFromRemainingArguments)] [string[]] $MoreFolders,
   [switch] $Quiet
 )
 
@@ -182,22 +187,25 @@ function Resolve-Folder([string] $path) {
   if ($path -match '^[A-Za-z]:\\?$') {
     throw "Windows only shows custom pictures on folders, not on whole drives ($path).`n`nRight-click a folder instead."
   }
-  if (-not (Test-Path -LiteralPath $path -PathType Container)) { throw "Folder not found: $path" }
+  if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+    throw "That isn't a folder:`n$path`n`nFolder pictures can only go on folders."
+  }
   (Get-Item -LiteralPath $path -Force).FullName.TrimEnd('\')
 }
 
-function Set-FolderPicture([string] $dir, [string] $file) {
-  if (-not $file) {
+function Select-Picture([string[]] $dirs) {
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Title = "Choose a picture for `"$(Split-Path -Leaf $dir)`""
+    $dlg.Title = if ($dirs.Count -eq 1) { "Choose a picture for `"$(Split-Path -Leaf $dirs[0])`"" }
+                 else { "Choose a picture for $($dirs.Count) folders" }
     $dlg.Filter = 'Pictures|*.jpg;*.jpeg;*.jfif;*.png;*.bmp;*.gif;*.tif;*.tiff;*.ico|All files|*.*'
-    $dlg.InitialDirectory = $dir
+    $dlg.InitialDirectory = $dirs[0]
     $owner = New-Owner
     try { $ok = $dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK }
     finally { $owner.Dispose() }
-    if (-not $ok) { return }
-    $file = $dlg.FileName
-  }
+    if ($ok) { $dlg.FileName }
+}
+
+function Set-FolderPicture([string] $dir, [string] $file) {
 
   try { $img = Get-OrientedImage $file }
   catch { throw "Windows can't read that picture:`n$file`n`nTry a JPG, PNG, BMP, GIF or TIFF." }
@@ -286,18 +294,54 @@ function Install-Menu {
       Set-Item -Path "$k\command" -Value "$base $($it.Args)"
     }
   }
+  Install-SendTo $ps $script
+}
+
+# "Send to" entries. Unlike the classic right-click menu, Send to shows directly in
+# the Windows 11 right-click menu. Send to adds the selected folder path(s) after -Folder.
+$SendToItems = @(
+  @{ Name = 'Folder picture - Set';    Args = '-Set -Folder';    Icon = 'imageres.dll,-72' },
+  @{ Name = 'Folder picture - Remove'; Args = '-Remove -Folder'; Icon = 'shell32.dll,131' }
+)
+
+function Install-SendTo([string] $ps, [string] $script) {
+  $sendTo = [Environment]::GetFolderPath('SendTo')
+  $shell = New-Object -ComObject WScript.Shell
+  foreach ($it in $SendToItems) {
+    $lnk = $shell.CreateShortcut((Join-Path $sendTo "$($it.Name).lnk"))
+    $lnk.TargetPath = $ps
+    $lnk.Arguments = "-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`" $($it.Args)"
+    $lnk.IconLocation = "$env:SystemRoot\System32\$($it.Icon)"
+    $lnk.WindowStyle = 7   # start minimised so no console flashes up
+    $lnk.Save()
+  }
+}
+
+function Uninstall-SendTo {
+  $sendTo = [Environment]::GetFolderPath('SendTo')
+  foreach ($it in $SendToItems) {
+    Remove-Item -LiteralPath (Join-Path $sendTo "$($it.Name).lnk") -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Uninstall-Menu {
   Remove-MenuKeys (@($MenuKey) + $OldMenuKeys)
+  Uninstall-SendTo
 }
 
 try {
   switch ($PSCmdlet.ParameterSetName) {
-    'Install'   { Install-Menu;   Show-Message "Done. Right-click any folder and choose `"Folder picture`".`n`nOn Windows 11 it is under `"Show more options`" (or hold Shift while right-clicking)." }
+    'Install'   { Install-Menu;   Show-Message "Done. Right-click any folder, then:`n`n  Send to > Folder picture - Set`n`nor hold Shift while right-clicking and choose Folder picture." }
     'Uninstall' { Uninstall-Menu; Show-Message 'The "Folder picture" menu has been removed. Folders that already have a picture keep it.' }
-    'Set'       { Set-FolderPicture (Resolve-Folder $Folder) $Picture }
-    'Remove'    { Remove-FolderPicture (Resolve-Folder $Folder) }
+    'Set' {
+      $dirs = @(@($Folder) + @($MoreFolders) | Where-Object { $_ } | ForEach-Object { Resolve-Folder $_ })
+      if (-not $Picture) { $Picture = Select-Picture $dirs }
+      if ($Picture) { foreach ($d in $dirs) { Set-FolderPicture $d $Picture } }
+    }
+    'Remove' {
+      $dirs = @(@($Folder) + @($MoreFolders) | Where-Object { $_ } | ForEach-Object { Resolve-Folder $_ })
+      foreach ($d in $dirs) { Remove-FolderPicture $d }
+    }
   }
 } catch {
   Show-Message $_.Exception.Message 'Error'

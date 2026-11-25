@@ -12,14 +12,24 @@ No admin rights needed; it only affects your own Windows account.
 
 ## Use
 
-Right-click any folder → **Folder picture** → **Set picture…**, choose an image, and the
-folder's icon becomes that picture (best seen in Medium/Large icons view). It also works by
-right-clicking the empty space inside an open folder.
+Right-click any folder → **Send to** → **Folder picture - Set**, choose an image, and the
+folder's icon becomes that picture (best seen in Medium/Large icons view).
+**Folder picture - Remove** puts the normal folder icon back.
 
-**Remove picture** puts the normal folder icon back.
+Select several folders first to give them all the same picture in one go.
 
-On Windows 11 the menu is under **Show more options** (or hold <kbd>Shift</kbd> while
-right-clicking).
+There is also a **Folder picture** submenu in the full (classic) right-click menu: hold
+<kbd>Shift</kbd> while right-clicking, or choose **Show more options**. That one also
+works on the empty space inside an open folder.
+
+## Updating
+
+```powershell
+cd C:\Projects\MyPictureFolders
+git pull
+```
+
+Then double-click **`Install Folder Picture Menu.cmd`** again.
 
 ## Details
 
@@ -30,7 +40,7 @@ right-clicking).
   Properties → Customize → Change Icon — so the picture stays with the folder if you move
   or copy it.
 - Drives (like `C:\`) can't be given a picture — only folders.
-- To take the menu away, run **`Uninstall Folder Picture Menu.cmd`**. Folders that already
+- To take the menus away, run **`Uninstall Folder Picture Menu.cmd`**. Folders that already
   have a picture keep it.
 
 ## From a terminal
