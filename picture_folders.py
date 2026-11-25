@@ -15,7 +15,7 @@ import tempfile
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
-from picture_viewer import PictureViewer
+from picture_viewer import PictureViewer, bind_grid_wheel
 from media_catalog import PHOTOS, connect, migrate_model_keys, person_name, set_favorite, show_catalog
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
@@ -211,7 +211,7 @@ class Browser:
         self.window = self.canvas.create_window(0, 0, window=self.grid, anchor="nw")
         self.grid.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")) if self.group_label != "Models" else None)
         self.canvas.bind("<Configure>", self.schedule_layout)
-        root.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-int(e.delta/120), "units"))
+        bind_grid_wheel(root, self.canvas, self.wheel_page)
         footer = ttk.Frame(root, padding=6)
         footer.pack(fill="x")
         self.prev = ttk.Button(footer, text="Previous", command=lambda: self.turn(-1))
@@ -335,6 +335,13 @@ class Browser:
             PictureViewer(self.root, pictures, path)
         else:
             os.startfile(path)
+
+    def wheel_page(self, step):
+        button = self.next if step > 0 else self.prev
+        if self.group_label != "Models" and button.instate(["!disabled"]):
+            self.turn(step)
+            if step < 0:
+                self.canvas.yview_moveto(1)
 
     def turn(self, step):
         self.page += step

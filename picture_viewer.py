@@ -5,6 +5,38 @@ import tkinter as tk
 from PIL import Image, ImageOps, ImageTk
 
 
+def bind_grid_wheel(window, canvas, change_page):
+    remainder = 0
+    def wheel(event):
+        nonlocal remainder
+        if event.state & 0x0004:  # Ctrl is reserved for zoom.
+            return
+        x = event.x_root - canvas.winfo_rootx()
+        y = event.y_root - canvas.winfo_rooty()
+        if not (0 <= x < canvas.winfo_width() and 0 <= y < canvas.winfo_height()):
+            return
+        delta = event.delta
+        if getattr(event, "num", None) in (4, 5):
+            delta = 120 if event.num == 4 else -120
+        if delta * remainder < 0:
+            remainder = 0
+        remainder += delta
+        steps = int(remainder / 120)
+        remainder -= steps * 120
+        if steps:
+            first, last = canvas.yview()
+            if steps < 0 and last >= 1:
+                change_page(1)
+            elif steps > 0 and first <= 0:
+                change_page(-1)
+            else:
+                canvas.yview_scroll(-3 * steps, "units")
+        return "break"
+
+    for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+        window.bind(sequence, wheel)
+
+
 class PictureViewer:
     def __init__(self, parent, paths, selected):
         self.paths = paths

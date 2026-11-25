@@ -295,7 +295,7 @@ def show_catalog(browser):
     import tkinter as tk
     from tkinter import filedialog, messagebox, simpledialog, ttk
     from PIL import ImageTk
-    from picture_viewer import PictureViewer
+    from picture_viewer import PictureViewer, bind_grid_wheel
     existing = getattr(browser, "catalog_window", None)
     if existing and existing.winfo_exists():
         existing.lift()
@@ -493,6 +493,16 @@ def show_catalog(browser):
             close()
         return "break"
 
+    def wheel_page(step):
+        button = nxt if step > 0 else prev
+        if button.instate(["!disabled"]):
+            turn(step)
+            if step < 0:
+                area.update_idletasks()
+                area.yview_moveto(1)
+
+    area.configure(yscrollincrement=20)
+    bind_grid_wheel(win, area, wheel_page)
     win.bind("<Escape>", go_back)
     win.protocol("WM_DELETE_WINDOW",close)
     refresh(True)
