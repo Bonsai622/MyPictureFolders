@@ -42,8 +42,13 @@ $Sizes      = 256, 128, 64, 48, 32, 24, 16
 # Invisible always-on-top owner so dialogs open in front of Explorer, not behind it.
 function New-Owner {
   $f = New-Object System.Windows.Forms.Form
+  # Dialogs centre themselves on their owner, so the owner sits (invisibly) in the
+  # middle of the screen - parking it off-screen would put the dialogs off-screen too.
   $f.TopMost = $true; $f.ShowInTaskbar = $false; $f.Opacity = 0
-  $f.StartPosition = 'Manual'; $f.Location = New-Object System.Drawing.Point -32000, -32000
+  $f.FormBorderStyle = 'None'; $f.StartPosition = 'Manual'
+  $area = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+  $f.Size = New-Object System.Drawing.Size 1, 1
+  $f.Location = New-Object System.Drawing.Point ([int]($area.X + $area.Width / 2)), ([int]($area.Y + $area.Height / 3))
   $f.Show(); $f.Activate()
   $f
 }
