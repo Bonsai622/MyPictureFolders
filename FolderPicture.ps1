@@ -95,15 +95,33 @@ function Update-Explorer([string] $dir, [switch] $Network) {
       $networkPath = Join-Path $drive.DisplayRoot $dir.Substring($driveRoot.Length)
     }
 
-    # Send a second notification after SMB metadata has had time to settle.
-    Start-Sleep -Milliseconds 1000
-    Send-FolderChange $networkPath
+    $paths = @($dir, $networkPath)
     foreach ($mapping in $mapped) {
       $prefix = $mapping.DisplayRoot.TrimEnd([char]92) + [char]92
       if ($networkPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        Send-FolderChange (Join-Path $mapping.Root $networkPath.Substring($prefix.Length))
+        $paths += Join-Path $mapping.Root $networkPath.Substring($prefix.Length)
       }
     }
+    $paths = @($paths | Select-Object -Unique)
+    $parents = @($paths | ForEach-Object { (Split-Path -Parent $_).TrimEnd([char]92) })
+    $shell = New-Object -ComObject Shell.Application
+
+    # Refresh only views showing this folder's parent. Retry after the network
+    # client's directory metadata has had more time to expire.
+    foreach ($delay in 1000, 10000) {
+      Start-Sleep -Milliseconds $delay
+      foreach ($path in $paths) { Send-FolderChange $path }
+      foreach ($window in $shell.Windows()) {
+        try {
+          $viewPath = [string]$window.Document.Folder.Self.Path
+          if ($parents -contains $viewPath.TrimEnd([char]92)) { $window.Refresh() }
+        } catch {
+          # Explorer can close a view while we enumerate it.
+          continue
+        }
+      }
+    }
+    return
   }
   [FolderPicture.Shell]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
   # Ask Windows to refresh its icon cache as well.
