@@ -144,6 +144,7 @@ class Browser:
         storage.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(storage / "library.sqlite")
         self.db.execute("CREATE TABLE IF NOT EXISTS folders(path TEXT PRIMARY KEY COLLATE NOCASE)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS model_covers(model TEXT PRIMARY KEY, settings TEXT NOT NULL)")
         self.folder = None
         self.page = 0
         self.favorite_db = connect(storage)
@@ -273,7 +274,9 @@ class Browser:
             messagebox.showinfo("Existing files skipped", "\n".join(skipped))
 
     def edit_current(self):
-        if self.folder:
+        if self.group_label.startswith("Models / "):
+            self.editor(ModelFolder(self.group_label[len("Models / "):], self.entries))
+        elif self.folder:
             self.editor(self.folder)
         else:
             messagebox.showinfo("Edit cover", "Open a folder or use its Edit cover button.")
@@ -402,7 +405,7 @@ class Browser:
             art = None
             try:
                 if group:
-                    art = folder_art(DEFAULT)
+                    art = folder_art(self.cover_settings(path))
                 elif directory:
                     data = settings(path)
                     title = data["title"] or title
@@ -419,7 +422,7 @@ class Browser:
             detail = f"{path.name} · {len(path.sets)} sets" if group else str(path)
             button.bind("<Enter>", lambda e, value=detail: self.location.configure(text=value))
             button.bind("<Leave>", lambda e: self.location.configure(text=str(self.group_label or self.folder or "My folders")))
-            if directory:
+            if directory or group:
                 edit = ttk.Button(card, text="✎", width=2, command=lambda p=path: self.editor(p))
                 edit.place(relx=1, x=-2, y=2, anchor="ne")
             if group or directory:
@@ -444,20 +447,38 @@ class Browser:
         self.count.configure(text=f"{start+1 if entries else 0}–{min(start+PAGE,len(entries))} of {len(entries)} items")
         self.canvas.yview_moveto(0)
 
+    def cover_settings(self, folder):
+        if isinstance(folder, ModelFolder):
+            row = self.db.execute("SELECT settings FROM model_covers WHERE model=?", (folder.name.casefold(),)).fetchone()
+            return {**DEFAULT, **(json.loads(row[0]) if row else {})}
+        return settings(folder)
+
+    def store_cover(self, folder, data):
+        if isinstance(folder, ModelFolder):
+            with self.db:
+                self.db.execute("INSERT OR REPLACE INTO model_covers VALUES(?,?)",
+                                (folder.name.casefold(), json.dumps(data, separators=(",", ":"))))
+        else:
+            save_settings(folder, data)
+            self.remember(folder)
+
     def editor(self, folder):
-        data = settings(folder)
+        model = isinstance(folder, ModelFolder)
+        data = self.cover_settings(folder)
+        source_folder = folder.sets[0] if model else folder
         dialog = tk.Toplevel(self.root)
-        dialog.title("Customize folder")
+        dialog.title("Model folder cover" if model else "Customize folder")
         dialog.transient(self.root)
         dialog.grab_set()
         body = ttk.Frame(dialog, padding=12)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text=str(folder), wraplength=480).pack()
+        ttk.Label(body, text=folder.name if model else str(folder), wraplength=480).pack()
         art = ttk.Label(body)
         art.pack(pady=4)
         title = tk.StringVar(value=data["title"] or folder.name)
-        ttk.Label(body, text="Display name").pack(anchor="w")
-        ttk.Entry(body, textvariable=title).pack(fill="x")
+        if not model:
+            ttk.Label(body, text="Display name").pack(anchor="w")
+            ttk.Entry(body, textvariable=title).pack(fill="x")
         source = None
         if data.get("cover"):
             with Image.open(io.BytesIO(base64.b64decode(data["cover"]))) as img:
@@ -489,16 +510,31 @@ class Browser:
         buttons = ttk.Frame(body)
         buttons.pack(pady=5)
         for label, cmd in [("Choose picture…", lambda: choose(filedialog.askopenfilename(
-                parent=dialog, initialdir=folder, filetypes=[("Pictures", " ".join("*"+e for e in sorted(PICTURES)))]))),
+                parent=dialog, initialdir=source_folder, filetypes=[("Pictures", " ".join("*"+e for e in sorted(PICTURES)))]))),
                 ("Border color…", color), ("Plain folder", plain)]:
             ttk.Button(buttons, text=label, command=cmd).pack(side="left")
-        pictures = sorted((p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in PICTURES
-                           and not (p.name.startswith("folder-picture-") and p.suffix.lower() == ".ico")),
-                          key=lambda p: p.name.casefold())
-        if pictures:
-            ttk.Label(body, text="Pictures in this folder").pack(anchor="w")
-            strip = ttk.Frame(body)
-            strip.pack()
+        if model:
+            ttk.Label(body, text="Pictures from set").pack(anchor="w")
+            set_picker = ttk.Combobox(body, values=[str(p) for p in folder.sets], state="readonly")
+            set_picker.current(0)
+            set_picker.pack(fill="x")
+        strip = ttk.Frame(body)
+        strip.pack()
+        def load_strip(event=None):
+            nonlocal source_folder
+            if model:
+                source_folder = folder.sets[set_picker.current()]
+            for child in strip.winfo_children():
+                child.destroy()
+            try:
+                pictures = sorted((p for p in source_folder.iterdir() if p.suffix.lower() in PICTURES
+                                   and p.is_file() and not (p.name.startswith("folder-picture-") and p.suffix.lower()==".ico")),
+                                  key=lambda p: p.name.casefold())
+            except OSError:
+                pictures = []
+            if not pictures:
+                ttk.Label(strip, text="Use Choose picture to browse for an image.").pack()
+                return
             offset = 0
             def show_strip(start):
                 nonlocal offset
@@ -519,6 +555,9 @@ class Browser:
                 ttk.Button(strip, text="›", width=2, state="normal" if start+4<len(pictures) else "disabled",
                            command=lambda: show_strip(offset+4)).pack(side="left")
             show_strip(0)
+        if model:
+            set_picker.bind("<<ComboboxSelected>>", load_strip)
+        load_strip()
         for key, label, low, high in [("x","Horizontal position",0,100),("y","Vertical position",0,100),
                                      ("width","Stretch width",100,400),("height","Stretch height",100,400)]:
             row = ttk.Frame(body)
@@ -535,8 +574,7 @@ class Browser:
             data["title"] = title.get().strip()
             if source is not None:
                 data["cover"] = encode_cover(source)
-            save_settings(folder, data)
-            self.remember(folder)
+            self.store_cover(folder, data)
             dialog.destroy()
             self.draw()
         actions = ttk.Frame(body)
