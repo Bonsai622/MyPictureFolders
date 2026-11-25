@@ -105,6 +105,69 @@ function Get-OrientedImage([string] $file) {
   $img
 }
 
+function New-RoundedPath([single] $x, [single] $y, [single] $w, [single] $h, [single] $r) {
+  $d = 2 * $r
+  $p = New-Object System.Drawing.Drawing2D.GraphicsPath
+  $p.AddArc($x, $y, $d, $d, [single]180, [single]90)
+  $p.AddArc([single]($x + $w - $d), $y, $d, $d, [single]270, [single]90)
+  $p.AddArc([single]($x + $w - $d), [single]($y + $h - $d), $d, $d, [single]0, [single]90)
+  $p.AddArc($x, [single]($y + $h - $d), $d, $d, [single]90, [single]90)
+  $p.CloseFigure()
+  $p
+}
+
+# Draws a 256x256 folder (tab, back, front) with the photo framed on its front,
+# so the icon still reads as a folder. Smaller icon sizes are scaled from this.
+function New-FolderComposite([System.Drawing.Image] $photo) {
+  $bmp = New-Object System.Drawing.Bitmap 256, 256, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.Clear([System.Drawing.Color]::Transparent)
+  $g.SmoothingMode     = 'AntiAlias'
+  $g.InterpolationMode = 'HighQualityBicubic'
+  $g.PixelOffsetMode   = 'HighQuality'
+
+  $back  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(218, 152, 40))
+  $front = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 200, 72))
+  $white = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
+  $shine = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255, 226, 140)), 2
+
+  foreach ($shape in @(
+      @{ Brush = $back;  Path = (New-RoundedPath 8 24 110 40 12) },    # tab
+      @{ Brush = $back;  Path = (New-RoundedPath 8 40 240 188 14) },   # back
+      @{ Brush = $front; Path = (New-RoundedPath 8 66 240 166 14) })) { # front
+    $g.FillPath($shape.Brush, $shape.Path); $shape.Path.Dispose()
+  }
+  $g.DrawLine($shine, 22, 67, 234, 67)
+
+  # Photo: the whole picture, fitted into the front panel, with a thin white frame.
+  $ax = 22; $ay = 80; $aw = 212; $ah = 140
+  $scale = [Math]::Min($aw / $photo.Width, $ah / $photo.Height)
+  $w = [Math]::Max(1, [int][Math]::Round($photo.Width * $scale))
+  $h = [Math]::Max(1, [int][Math]::Round($photo.Height * $scale))
+  $x = [int]($ax + ($aw - $w) / 2); $y = [int]($ay + ($ah - $h) / 2)
+
+  $frame = New-RoundedPath ($x - 3) ($y - 3) ($w + 6) ($h + 6) 6
+  $g.FillPath($white, $frame); $frame.Dispose()
+
+  $scaled = New-Object System.Drawing.Bitmap $w, $h, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $sg = [System.Drawing.Graphics]::FromImage($scaled)
+  $sg.InterpolationMode = 'HighQualityBicubic'; $sg.PixelOffsetMode = 'HighQuality'
+  $attrs = New-Object System.Drawing.Imaging.ImageAttributes
+  $attrs.SetWrapMode([System.Drawing.Drawing2D.WrapMode]::TileFlipXY)   # no grey fringe on edges
+  $sg.DrawImage($photo, (New-Object System.Drawing.Rectangle 0, 0, $w, $h), 0, 0, $photo.Width, $photo.Height, [System.Drawing.GraphicsUnit]::Pixel, $attrs)
+  $sg.Dispose(); $attrs.Dispose()
+
+  # Fill a rounded shape with the photo so its corners are smooth.
+  $tex = New-Object System.Drawing.TextureBrush $scaled, ([System.Drawing.Drawing2D.WrapMode]::Clamp)
+  $tex.TranslateTransform($x, $y)
+  $clip = New-RoundedPath $x $y $w $h 4
+  $g.FillPath($tex, $clip)
+  $clip.Dispose(); $tex.Dispose(); $scaled.Dispose()
+
+  $back.Dispose(); $front.Dispose(); $white.Dispose(); $shine.Dispose(); $g.Dispose()
+  $bmp
+}
+
 # A 32-bit icon bitmap: BITMAPINFOHEADER (height doubled for the mask), BGRA rows
 # bottom-up, then an all-zero AND mask (transparency comes from the alpha channel).
 function ConvertTo-IconDib([System.Drawing.Bitmap] $bmp) {
@@ -140,7 +203,7 @@ function New-IconBytes([System.Drawing.Image] $img) {
     $g.SmoothingMode      = 'HighQuality'
     $g.PixelOffsetMode    = 'HighQuality'
     $g.CompositingQuality = 'HighQuality'
-    # Fit the whole picture inside the square (nothing cropped), centred.
+    # Fit the (square) folder image into this icon size.
     $scale = [Math]::Min($size / $img.Width, $size / $img.Height)
     $w = [Math]::Max(1, [int][Math]::Round($img.Width * $scale))
     $h = [Math]::Max(1, [int][Math]::Round($img.Height * $scale))
@@ -256,7 +319,8 @@ function Set-FolderPicture([string] $dir, [string] $file) {
 
   try { $img = Get-OrientedImage $file }
   catch { throw "Windows can't read that picture:`n$file`n`nTry a JPG, PNG, BMP, GIF or TIFF." }
-  try { $bytes = New-IconBytes $img } finally { $img.Dispose() }
+  try { $folderImg = New-FolderComposite $img } finally { $img.Dispose() }
+  try { $bytes = New-IconBytes $folderImg } finally { $folderImg.Dispose() }
 
   # A fresh file name every time - Explorer caches icons by path, so reusing a
   # name would keep showing the old picture.

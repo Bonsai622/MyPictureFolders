@@ -34,7 +34,9 @@ Then double-click **`Install Folder Picture Menu.cmd`** again.
 ## Details
 
 - Works with JPG, PNG, BMP, GIF, TIFF, and ICO. Phone photos are rotated the right way up.
-- The whole picture is shown, centred in the icon — nothing is cropped off.
+- The icon keeps the folder shape — a yellow folder with its tab — with your picture
+  framed on the front, so it still reads as a folder. The whole picture is shown;
+  nothing is cropped off.
 - Your original picture is never changed. A small hidden `folder-picture-….ico` and the
   usual hidden `desktop.ini` are saved inside the folder — the same mechanism as
   Properties → Customize → Change Icon. Like Windows' own setting, it records the icon's
