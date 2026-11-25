@@ -114,6 +114,17 @@ def model_folders(entries):
     return [groups[key] for key in sorted(groups)] + loose
 
 
+MODEL_ROW_HEIGHT = 132
+
+
+def model_window(count, width, height, top):
+    columns = max(1, width // 145)
+    rows = (count + columns - 1) // columns
+    first = min(max(0, rows - 1), max(0, int(top // MODEL_ROW_HEIGHT) - 1))
+    end = min(rows, math.ceil((top + height) / MODEL_ROW_HEIGHT) + 1)
+    return columns, first * columns, min(count, end * columns), rows * MODEL_ROW_HEIGHT
+
+
 def favorite_key(entry):
     if isinstance(entry, ModelFolder):
         return ("model", entry.name.casefold())
@@ -155,6 +166,7 @@ class Browser:
         self.favorite_menu = tk.Menu(root, tearoff=False)
         self.tiles = []
         self.layout_job = None
+        self.model_range = None
         self.pending = []
         self.group_history = []
         self.group_label = ""
@@ -183,12 +195,16 @@ class Browser:
         area.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(area, highlightthickness=0, background="#f1f3f5")
         scroll = ttk.Scrollbar(area, command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scroll.set)
+        def scrolled(first, last):
+            scroll.set(first, last)
+            if self.group_label == "Models":
+                self.schedule_layout()
+        self.canvas.configure(yscrollcommand=scrolled, yscrollincrement=16)
         scroll.pack(side="right", fill="y")
         self.canvas.pack(side="left", expand=True, fill="both")
         self.grid = ttk.Frame(self.canvas)
         self.window = self.canvas.create_window(0, 0, window=self.grid, anchor="nw")
-        self.grid.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.grid.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")) if self.group_label != "Models" else None)
         self.canvas.bind("<Configure>", self.schedule_layout)
         root.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-int(e.delta/120), "units"))
         footer = ttk.Frame(root, padding=6)
@@ -287,7 +303,7 @@ class Browser:
     def group_by_model(self):
         if self.group_label:
             return
-        entries = model_folders(self.entries)
+        entries = [group for group in model_folders(self.entries) if isinstance(group, ModelFolder)]
         self.remember_view()
         self.folder, self.entries, self.page = None, entries, 0
         self.group_label = "Models"
@@ -326,7 +342,10 @@ class Browser:
         self.dates.clear()
         self.directory_flags.clear()
         self.entries, self.folder, self.page = entries, folder, 0
-        self.draw()
+        if folder and any(re.search(r"\d", p.name) and person_name(p.name) and p.is_dir() for p in entries):
+            self.group_by_model()
+        else:
+            self.draw()
 
     def schedule_layout(self, event=None):
         if self.layout_job is not None:
@@ -338,8 +357,19 @@ class Browser:
         width, height = self.canvas.winfo_width(), self.canvas.winfo_height()
         if width < 10 or height < 10:
             return
+        if self.group_label == "Models":
+            columns, start, stop, total = model_window(len(self.model_entries), width, height, self.canvas.canvasy(0))
+            signature = (width, height, start, stop)
+            if signature == self.model_range:
+                return
+            self.model_range = signature
+            self.canvas.configure(scrollregion=(0, 0, width, max(height, total)))
+            self.canvas.coords(self.window, 0, (start // columns) * MODEL_ROW_HEIGHT)
+            self.render_tiles(self.model_entries[start:stop], self.model_favorites)
+            cell_w, cell_h = width // columns, MODEL_ROW_HEIGHT
+        else:
+            columns, cell_w, cell_h = grid_layout(len(self.tiles), width, height)
         self.canvas.itemconfigure(self.window, width=width)
-        columns, cell_w, cell_h = grid_layout(len(self.tiles), width, height)
         for i, (card, button, source, title) in enumerate(self.tiles):
             card.grid(row=i//columns, column=i%columns)
             card.configure(width=cell_w, height=cell_h)
@@ -389,15 +419,35 @@ class Browser:
         return sorted(entries, key=order)
 
     def draw(self):
-        for widget in self.grid.winfo_children():
-            widget.destroy()
-        self.tiles.clear()
         self.location.configure(text=str(self.group_label or self.folder or "My folders"))
         favorites = {(r[0], r[1].casefold()) for r in self.favorite_db.execute("SELECT kind,name FROM favorites")}
         entries = self.view_entries(favorites)
+        self.model_range = None
+        if self.group_label == "Models":
+            self.prev.pack_forget()
+            self.next.pack_forget()
+            self.model_entries, self.model_favorites = entries, favorites
+            self.count.configure(text=f"{len(entries)} models")
+            self.canvas.yview_moveto(0)
+            self.schedule_layout()
+            return
+        self.prev.pack(side="left", before=self.count)
+        self.next.pack(side="left", after=self.count)
+        self.canvas.coords(self.window, 0, 0)
         self.page = min(self.page, max(0,(len(entries)-1)//PAGE))
         start = self.page * PAGE
-        for path in entries[start:start+PAGE]:
+        self.render_tiles(entries[start:start+PAGE], favorites)
+        self.schedule_layout()
+        self.prev.configure(state="normal" if start else "disabled")
+        self.next.configure(state="normal" if start+PAGE<len(entries) else "disabled")
+        self.count.configure(text=f"{start+1 if entries else 0}–{min(start+PAGE,len(entries))} of {len(entries)} items")
+        self.canvas.yview_moveto(0)
+
+    def render_tiles(self, entries, favorites):
+        for widget in self.grid.winfo_children():
+            widget.destroy()
+        self.tiles.clear()
+        for path in entries:
             card = ttk.Frame(self.grid)
             group = isinstance(path, ModelFolder)
             directory = not group and path.is_dir()
@@ -438,14 +488,9 @@ class Browser:
                     heart.bind("<Button-3>", show_menu)
                     heart.bind("<Button-1>", lambda e, b=button: b.invoke())
             self.tiles.append((card, button, art, title))
-        self.schedule_layout()
         if not entries:
             empty = "No favorites in this view." if self.filter_mode.get() == "Favorite" else "No items in this view."
             ttk.Label(self.grid, text=empty, padding=18).grid()
-        self.prev.configure(state="normal" if start else "disabled")
-        self.next.configure(state="normal" if start+PAGE<len(entries) else "disabled")
-        self.count.configure(text=f"{start+1 if entries else 0}–{min(start+PAGE,len(entries))} of {len(entries)} items")
-        self.canvas.yview_moveto(0)
 
     def cover_settings(self, folder):
         if isinstance(folder, ModelFolder):
