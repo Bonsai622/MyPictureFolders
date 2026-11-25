@@ -389,12 +389,24 @@ function Set-FolderPicture([string] $dir, [string] $file) {
     $ini.Lines.InsertRange(0, $entries)
     $ini.Lines.Insert(0, '[.ShellClassInfo]')
   }
+  $folderItem = Get-Item -LiteralPath $dir -Force
+  $folderFlag = [System.IO.FileAttributes]::ReadOnly
+  if ($isNetwork) {
+    $folderFlag = [System.IO.FileAttributes]::System
+    # Record ownership so Remove preserves a System flag set by something else.
+    if (-not ($folderItem.Attributes -band $folderFlag) -and
+        -not $ini.Lines.Contains('; MyPictureFolders added the System attribute')) {
+      $ini.Lines.Add('; MyPictureFolders added the System attribute')
+    }
+  }
   Write-DesktopIni $iniPath $ini.Lines.ToArray()
 
   # Explorer only reads desktop.ini on folders marked ReadOnly or System.
   # (ReadOnly on a folder does not make its files read-only.)
-  $folderItem = Get-Item -LiteralPath $dir -Force
-  $folderItem.Attributes = $folderItem.Attributes -bor [System.IO.FileAttributes]::ReadOnly
+  $folderItem.Attributes = $folderItem.Attributes -bor $folderFlag
+  if (-not ((Get-Item -LiteralPath $dir -Force).Attributes -band $folderFlag)) {
+    throw "Windows could not keep the $folderFlag attribute on this folder:`n$dir"
+  }
 
   Remove-OldIcons $dir $iconName
   Update-Explorer $dir
@@ -403,7 +415,9 @@ function Set-FolderPicture([string] $dir, [string] $file) {
 function Remove-FolderPicture([string] $dir) {
   $iniPath = Join-Path $dir 'desktop.ini'
   if (Test-Path -LiteralPath $iniPath) {
-    $lines = (Get-IniWithoutIcon $iniPath).Lines.ToArray()
+    $ini = Get-IniWithoutIcon $iniPath
+    $addedSystem = $ini.Lines.Remove('; MyPictureFolders added the System attribute')
+    $lines = $ini.Lines.ToArray()
     $meaningful = $lines | Where-Object { $_.Trim() -and $_.Trim() -notmatch '^\[.*\]$' }
     if ($meaningful) {
       Write-DesktopIni $iniPath $lines
@@ -413,6 +427,9 @@ function Remove-FolderPicture([string] $dir) {
       Remove-Item -LiteralPath $iniPath -Force
       $folderItem = Get-Item -LiteralPath $dir -Force
       $folderItem.Attributes = $folderItem.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
+      if ($addedSystem) {
+        $folderItem.Attributes = $folderItem.Attributes -band (-bnot [System.IO.FileAttributes]::System)
+      }
     }
   }
   Remove-OldIcons $dir ''
