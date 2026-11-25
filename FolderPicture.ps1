@@ -813,16 +813,23 @@ function Install-SendTo([string] $ps, [string] $script) {
     $lnk.WindowStyle = 7   # start minimised so no console flashes up
     $lnk.Save()
   }
-  $app = $shell.CreateShortcut((Join-Path $sendTo 'MyPictureFolders.lnk'))
-  $app.TargetPath = Join-Path (Split-Path -Parent $script) 'Open MyPictureFolders.cmd'
-  $app.WorkingDirectory = Split-Path -Parent $script
-  $app.IconLocation = "$env:SystemRoot\System32\imageres.dll,-72"
-  $app.Save()
+  $appDir = Split-Path -Parent $script
+  $desktop = [Environment]::GetFolderPath('DesktopDirectory')
+  foreach ($location in @($sendTo, $desktop)) {
+    $app = $shell.CreateShortcut((Join-Path $location 'MyPictureFolders.lnk'))
+    $app.TargetPath = Join-Path $appDir 'Open MyPictureFolders.cmd'
+    $app.WorkingDirectory = $appDir
+    $app.IconLocation = (Join-Path $appDir 'MyPictureFolders.ico') + ',0'
+    $app.Description = 'Open MyPictureFolders'
+    $app.Save()
+  }
 
 }
 
 function Uninstall-SendTo {
   $sendTo = [Environment]::GetFolderPath('SendTo')
+  $desktop = [Environment]::GetFolderPath('DesktopDirectory')
+  Remove-Item -LiteralPath (Join-Path $desktop 'MyPictureFolders.lnk') -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $sendTo 'MyPictureFolders.lnk') -Force -ErrorAction SilentlyContinue
   foreach ($it in $SendToItems) {
     Remove-Item -LiteralPath (Join-Path $sendTo "$($it.Name).lnk") -Force -ErrorAction SilentlyContinue
@@ -836,7 +843,7 @@ function Uninstall-Menu {
 
 try {
   switch ($PSCmdlet.ParameterSetName) {
-    'Install'   { Install-Menu;   Show-Message "Done. Right-click any folder, then:`n`n  Send to > Folder picture - Set`n  Send to > Folder picture - From clipboard`n`nor hold Shift while right-clicking and choose Folder picture." }
+    'Install'   { Install-Menu;   Show-Message "MyPictureFolders is on your desktop. Right-click any folder, then:`n`n  Send to > Folder picture - Set`n  Send to > Folder picture - From clipboard`n`nor hold Shift while right-clicking and choose Folder picture." }
     'Uninstall' { Uninstall-Menu; Show-Message 'The "Folder picture" menu has been removed. Folders that already have a picture keep it.' }
     'Set' {
       $dirs = @(@($Folder) + @($MoreFolders) | Where-Object { $_ } | ForEach-Object { Resolve-Folder $_ })
