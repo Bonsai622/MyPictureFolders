@@ -73,15 +73,39 @@ if (-not ('FolderPicture.Shell' -as [type])) {
 '@
 }
 
-function Update-Explorer([string] $dir) {
-  $SHCNE_UPDATEDIR = 0x1000; $SHCNE_UPDATEITEM = 0x2000; $SHCNE_ASSOCCHANGED = 0x08000000
-  $SHCNF_PATHW = 0x0005; $SHCNF_FLUSH = 0x1000
-  [FolderPicture.Shell]::SHChangeNotify($SHCNE_UPDATEITEM, $SHCNF_PATHW -bor $SHCNF_FLUSH, $dir, [IntPtr]::Zero)
-  $parent = Split-Path -Parent $dir
+function Send-FolderChange([string] $path) {
+  $flags = 0x0005 -bor 0x1000 # SHCNF_PATHW | SHCNF_FLUSH
+  [FolderPicture.Shell]::SHChangeNotify(0x0800, $flags, $path, [IntPtr]::Zero) # SHCNE_ATTRIBUTES
+  [FolderPicture.Shell]::SHChangeNotify(0x2000, $flags, $path, [IntPtr]::Zero) # SHCNE_UPDATEITEM
+  $parent = Split-Path -Parent $path
   if ($parent) {
-    [FolderPicture.Shell]::SHChangeNotify($SHCNE_UPDATEDIR, $SHCNF_PATHW -bor $SHCNF_FLUSH, $parent, [IntPtr]::Zero)
+    [FolderPicture.Shell]::SHChangeNotify(0x1000, $flags, $parent, [IntPtr]::Zero) # SHCNE_UPDATEDIR
   }
-  [FolderPicture.Shell]::SHChangeNotify($SHCNE_ASSOCCHANGED, 0, [IntPtr]::Zero, [IntPtr]::Zero)
+}
+
+function Update-Explorer([string] $dir, [switch] $Network) {
+  Send-FolderChange $dir
+  if ($Network) {
+    # Explorer may be displaying a different path to the same network folder.
+    $mapped = @(Get-PSDrive -PSProvider FileSystem | Where-Object { $_.DisplayRoot })
+    $networkPath = $dir
+    $driveRoot = [System.IO.Path]::GetPathRoot($dir)
+    $drive = $mapped | Where-Object { $_.Root -eq $driveRoot } | Select-Object -First 1
+    if ($drive) {
+      $networkPath = Join-Path $drive.DisplayRoot $dir.Substring($driveRoot.Length)
+    }
+
+    # Send a second notification after SMB metadata has had time to settle.
+    Start-Sleep -Milliseconds 1000
+    Send-FolderChange $networkPath
+    foreach ($mapping in $mapped) {
+      $prefix = $mapping.DisplayRoot.TrimEnd([char]92) + [char]92
+      if ($networkPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Send-FolderChange (Join-Path $mapping.Root $networkPath.Substring($prefix.Length))
+      }
+    }
+  }
+  [FolderPicture.Shell]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
   # Ask Windows to refresh its icon cache as well.
   $ie4 = Join-Path $env:SystemRoot 'System32\ie4uinit.exe'
   if (Test-Path -LiteralPath $ie4) {
@@ -439,7 +463,7 @@ function Set-FolderPicture([string] $dir, [byte[]] $bytes) {
 
   # A fresh file name every time - Explorer caches icons by path, so reusing a
   # name would keep showing the old picture.
-  $iconName = $IconPrefix + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.ico'
+  $iconName = $IconPrefix + [Guid]::NewGuid().ToString('N') + '.ico'
   $iconPath = Join-Path $dir $iconName
   [System.IO.File]::WriteAllBytes($iconPath, $bytes)
   [System.IO.File]::SetAttributes($iconPath, [System.IO.FileAttributes]'Hidden, System')
@@ -481,7 +505,7 @@ function Set-FolderPicture([string] $dir, [byte[]] $bytes) {
   }
 
   Remove-OldIcons $dir $iconName
-  Update-Explorer $dir
+  Update-Explorer $dir -Network:$isNetwork
 }
 
 function Remove-FolderPicture([string] $dir) {
