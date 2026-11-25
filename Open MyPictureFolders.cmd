@@ -11,9 +11,9 @@ goto dependencies
 python -m venv "%appenv%"
 if errorlevel 1 goto failed
 :dependencies
-"%appenv%\Scripts\python.exe" -c "import tkinter; from PIL import Image, ImageTk, ImageOps; assert hasattr(Image,'Resampling')" >nul 2>&1
+"%appenv%\Scripts\python.exe" -c "import tkinter, imageio_ffmpeg; from PIL import Image, ImageTk, ImageOps; assert hasattr(Image,'Resampling')" >nul 2>&1
 if not errorlevel 1 goto launch
-"%appenv%\Scripts\python.exe" -m pip install "Pillow>=10"
+"%appenv%\Scripts\python.exe" -m pip install "Pillow>=10" "imageio-ffmpeg>=0.5"
 if errorlevel 1 goto failed
 :launch
 start "" "%appenv%\Scripts\pythonw.exe" "%~dp0picture_folders.py" %*

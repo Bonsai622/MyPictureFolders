@@ -12,6 +12,7 @@ import tempfile
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
+from media_catalog import show_catalog
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 META = ".mypicturefolders.json"
@@ -110,7 +111,7 @@ class Browser:
                 self.pending.append(p)
         self.bar = ttk.Frame(root, padding=8)
         self.bar.pack(fill="x")
-        for title, action in [("Library", self.home), ("Up", self.up), ("Open folder…", self.browse),
+        for title, action in [("Media catalog", lambda: show_catalog(self)), ("Library", self.home), ("Up", self.up), ("Open folder…", self.browse),
                               ("New folder…", self.create), ("Add files…", self.add_files),
                               ("Edit cover…", self.edit_current)]:
             ttk.Button(self.bar, text=title, command=action).pack(side="left", padx=2)

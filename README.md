@@ -92,3 +92,28 @@ the artwork and settings to a .mypicturefolders.json file inside the folder, so 
 account used for the NAS share needs write access. These covers appear inside the app.
 Ordinary folders use a plain folder illustration and images have independent thumbnails.
 Use **New folder** and **Add files** to create real folders and copy files into them.
+
+## Indexed media catalog
+
+Open **Media catalog → Watch folder** and select your library root. The scanner indexes
+photos and videos recursively. It stores file paths, metadata, favorites, tags and small
+thumbnail images in a local SQLite database under %LOCALAPPDATA%\MyPictureFolders.
+The originals stay on the selected drive or NAS. The first scan reads the originals to
+build previews. Later scans use file size and modification time to identify changes.
+Leave the same drive mapping available, or select the NAS using its UNC path.
+A disconnected share leaves previous catalog entries available for browsing.
+
+The app registers **MyPictureFolders hourly media scan** in Windows Task Scheduler for
+the signed-in user. It runs even when the app window is closed, while the PC is awake
+and the account is signed in. **Scan now** requests an immediate scan.
+Double-click a folder to browse its direct media or change View to browse all indexed
+photos/videos. Double-click media to open the original with its Windows default app.
+Select a tile to edit its comma-separated tags. Folder tags also match its direct media
+in filtered views. Use **Toggle favorite** on a folder, then **Favorite folders only**.
+Tags and favorites are keyed to paths; externally renaming or moving items can create
+new catalog entries.
+
+The person label uses the part of the folder name before the first digit, replacing
+hyphens, underscores and periods with spaces. For example, Jane-2025 is Jane,
+Jane-B-2025 is Jane B, and Jane-Brown-2025 is Jane Brown. Undated subfolders inherit
+a recognized parent label. Use the Person menu to see indexed names.
