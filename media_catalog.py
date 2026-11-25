@@ -51,7 +51,20 @@ def connect(home):
         tag TEXT COLLATE NOCASE, PRIMARY KEY(id,tag));
       CREATE INDEX IF NOT EXISTS tags_by_name ON tags(tag,id);
     """)
+    with db:
+        db.execute("CREATE TABLE IF NOT EXISTS favorites(kind TEXT, name TEXT COLLATE NOCASE, PRIMARY KEY(kind,name))")
+        if not option(db, "favorites_migrated"):
+            db.execute("INSERT OR IGNORE INTO favorites SELECT 'folder',path FROM albums WHERE favorite=1")
+            put(db, "favorites_migrated", "1")
     return db
+
+
+def set_favorite(db, kind, name, enabled):
+    with db:
+        if enabled:
+            db.execute("INSERT OR IGNORE INTO favorites VALUES(?,?)", (kind,name))
+        else:
+            db.execute("DELETE FROM favorites WHERE kind=? AND name=?", (kind,name))
 
 
 def option(db, key):
@@ -222,8 +235,8 @@ def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, p
         where.append("m.person=?")
         args.append(person)
     if favorites:
-        where.append("m.favorite=1" if albums else
-                     "EXISTS(SELECT 1 FROM albums a WHERE a.root=m.root AND a.path=m.parent AND a.favorite=1)")
+        path_column = "m.path" if albums else "m.parent"
+        where.append(f"EXISTS(SELECT 1 FROM favorites f WHERE f.kind='folder' AND f.name={path_column})")
     if tag:
         if albums:
             where.append("EXISTS(SELECT 1 FROM album_tags t WHERE t.id=m.id AND t.tag=?)")
@@ -238,7 +251,7 @@ def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, p
         order = "m.person," + order
     if sort == "File name" and not albums:
         order = "m.name,m.id"
-    columns = ("m.favorite,'Folder' AS kind,(SELECT f.id FROM media f WHERE f.root=m.root AND f.parent=m.path ORDER BY f.name,f.id LIMIT 1) AS preview"
+    columns = ("EXISTS(SELECT 1 FROM favorites f WHERE f.kind='folder' AND f.name=m.path) AS favorite,'Folder' AS kind,(SELECT f.id FROM media f WHERE f.root=m.root AND f.parent=m.path ORDER BY f.name,f.id LIMIT 1) AS preview"
                if albums else "0 AS favorite,m.kind,m.id AS preview")
     return db.execute(f"SELECT m.id,m.name,m.path,m.person,{columns} FROM {table} m WHERE "
                       + " AND ".join(where) + f" ORDER BY {order} LIMIT 101 OFFSET ?", args+[offset]).fetchall()
@@ -311,7 +324,7 @@ def show_catalog(browser):
                     preview.thumbnail(preview_size)
                     image = ImageTk.PhotoImage(preview)
                     photos.append(image)
-            text = ("★ " if row["favorite"] else "") + ("▶ " if row["kind"]=="Video" else "") + row["name"]
+            text = ("♥ " if row["favorite"] else "") + ("▶ " if row["kind"]=="Video" else "") + row["name"]
             tile = ttk.Button(grid,text=text[:20],image=image,compound="top",width=tile_width,
                               command=lambda r=row: select(r))
             tile.grid(row=i//columns,column=i%columns,padx=1,pady=1,sticky="nsew")
@@ -336,8 +349,7 @@ def show_catalog(browser):
         row = state["selected"]
         if not row or row["kind"]!="Folder":
             return messagebox.showinfo("Favorite folder","Select a folder tile first.",parent=win)
-        with db:
-            db.execute("UPDATE albums SET favorite=1-favorite WHERE id=?", (row["id"],))
+        set_favorite(db,"folder",row["path"],not row["favorite"])
         refresh()
 
     def edit_tags():

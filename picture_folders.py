@@ -1,5 +1,7 @@
 """A visual browser for real folders. Each folder owns its portable cover."""
 from dataclasses import dataclass
+from datetime import date
+import re
 import base64
 import io
 import json
@@ -13,7 +15,7 @@ import tempfile
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
-from media_catalog import person_name, show_catalog
+from media_catalog import connect, person_name, set_favorite, show_catalog
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 META = ".mypicturefolders.json"
@@ -112,6 +114,25 @@ def model_folders(entries):
     return [groups[key] for key in sorted(groups)] + loose
 
 
+def favorite_key(entry):
+    if isinstance(entry, ModelFolder):
+        return ("model", entry.name.casefold())
+    return ("folder", str(entry).casefold())
+
+
+def entry_date(path):
+    match = re.search(r"(?<!\d)(\d{4})[-_.]?(\d{2})[-_.]?(\d{2})(?!\d)", path.name)
+    if match:
+        try:
+            return date(*map(int, match.groups())).toordinal()
+        except ValueError:
+            pass
+    try:
+        return date.fromtimestamp(path.stat().st_mtime).toordinal()
+    except (OSError, ValueError, OverflowError):
+        return 0
+
+
 class Browser:
     def __init__(self, root, incoming):
         self.root = root
@@ -125,6 +146,12 @@ class Browser:
         self.db.execute("CREATE TABLE IF NOT EXISTS folders(path TEXT PRIMARY KEY COLLATE NOCASE)")
         self.folder = None
         self.page = 0
+        self.favorite_db = connect(storage)
+        self.sort_order = tk.StringVar(value="A-Z")
+        self.filter_mode = tk.StringVar(value="All")
+        self.dates = {}
+        self.directory_flags = {}
+        self.favorite_menu = tk.Menu(root, tearoff=False)
         self.tiles = []
         self.layout_job = None
         self.pending = []
@@ -141,6 +168,14 @@ class Browser:
                               ("New folder…", self.create), ("Add files…", self.add_files),
                               ("Edit cover…", self.edit_current), ("Group by Model", self.group_by_model)]:
             ttk.Button(self.bar, text=title, width=0, command=action).pack(side="left", padx=2)
+        controls = ttk.Frame(root, padding=(8, 0))
+        controls.pack(fill="x")
+        for label, variable, choices in [("Sort by", self.sort_order, ("A-Z", "Date")),
+                                         ("Filter", self.filter_mode, ("All", "Favorite"))]:
+            ttk.Label(controls, text=label).pack(side="left", padx=4)
+            chooser = ttk.Combobox(controls, textvariable=variable, values=choices, state="readonly", width=10)
+            chooser.pack(side="left", padx=(0, 8))
+            chooser.bind("<<ComboboxSelected>>", self.change_view)
         self.location = ttk.Label(root, padding=(12, 4))
         self.location.pack(fill="x")
         area = ttk.Frame(root)
@@ -182,7 +217,8 @@ class Browser:
 
     def up(self):
         if self.group_history:
-            self.folder, self.entries, self.page, self.group_label = self.group_history.pop()
+            self.folder, self.entries, self.page, self.group_label, mode = self.group_history.pop()
+            self.filter_mode.set(mode)
             self.draw()
             return
         self.enter(self.folder.parent if self.folder and self.folder != self.folder.parent else None)
@@ -243,7 +279,7 @@ class Browser:
             messagebox.showinfo("Edit cover", "Open a folder or use its Edit cover button.")
 
     def remember_view(self):
-        self.group_history.append((self.folder, self.entries, self.page, self.group_label))
+        self.group_history.append((self.folder, self.entries, self.page, self.group_label, self.filter_mode.get()))
 
     def group_by_model(self):
         if self.group_label:
@@ -258,6 +294,7 @@ class Browser:
         self.remember_view()
         self.folder, self.entries, self.page = None, group.sets, 0
         self.group_label = f"Models / {group.name}"
+        self.filter_mode.set("All")
         self.draw()
 
     def open_directory(self, folder):
@@ -282,6 +319,9 @@ class Browser:
         if not keep_history:
             self.group_history.clear()
         self.group_label = ""
+        self.filter_mode.set("All")
+        self.dates.clear()
+        self.directory_flags.clear()
         self.entries, self.folder, self.page = entries, folder, 0
         self.draw()
 
@@ -308,13 +348,53 @@ class Browser:
                 button.bitmap = ImageTk.PhotoImage(image)
                 button.configure(image=button.bitmap)
 
+    def change_view(self, event=None):
+        self.page = 0
+        self.draw()
+
+    def folder_menu(self, event, entry, enabled):
+        menu = self.favorite_menu
+        menu.delete(0, "end")
+        def toggle():
+            kind, name = favorite_key(entry)
+            set_favorite(self.favorite_db, kind, str(entry) if kind == "folder" else name, not enabled)
+            self.draw()
+        menu.add_command(label="Remove favorite" if enabled else "Favorite", command=toggle)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def view_entries(self, favorites):
+        def order(entry):
+            paths = entry.sets if isinstance(entry, ModelFolder) else [entry]
+            newest = 0
+            if self.sort_order.get() == "Date":
+                for path in paths:
+                    if path not in self.dates:
+                        self.dates[path] = entry_date(path)
+                    newest = max(newest, self.dates[path])
+            is_file = False
+            if not isinstance(entry, ModelFolder):
+                if entry not in self.directory_flags:
+                    self.directory_flags[entry] = entry.is_dir()
+                is_file = not self.directory_flags[entry]
+            return (is_file, -newest, entry.name.casefold())
+        entries = self.entries
+        if self.filter_mode.get() == "Favorite":
+            entries = [entry for entry in entries if favorite_key(entry) in favorites]
+        return sorted(entries, key=order)
+
     def draw(self):
         for widget in self.grid.winfo_children():
             widget.destroy()
         self.tiles.clear()
         self.location.configure(text=str(self.group_label or self.folder or "My folders"))
+        favorites = {(r[0], r[1].casefold()) for r in self.favorite_db.execute("SELECT kind,name FROM favorites")}
+        entries = self.view_entries(favorites)
+        self.page = min(self.page, max(0,(len(entries)-1)//PAGE))
         start = self.page * PAGE
-        for i, path in enumerate(self.entries[start:start+PAGE]):
+        for path in entries[start:start+PAGE]:
             card = ttk.Frame(self.grid)
             group = isinstance(path, ModelFolder)
             directory = not group and path.is_dir()
@@ -342,13 +422,26 @@ class Browser:
             if directory:
                 edit = ttk.Button(card, text="✎", width=2, command=lambda p=path: self.editor(p))
                 edit.place(relx=1, x=-2, y=2, anchor="ne")
+            if group or directory:
+                marked = favorite_key(path) in favorites
+                def show_menu(event, entry=path, enabled=marked):
+                    self.folder_menu(event, entry, enabled)
+                for widget in card.winfo_children():
+                    widget.bind("<Button-3>", show_menu)
+                card.bind("<Button-3>", show_menu)
+                if marked:
+                    heart = ttk.Label(card, text="♥", foreground="#bc2548")
+                    heart.place(x=3, y=2)
+                    heart.bind("<Button-3>", show_menu)
+                    heart.bind("<Button-1>", lambda e, b=button: b.invoke())
             self.tiles.append((card, button, art, title))
         self.schedule_layout()
-        if not self.entries:
-            ttk.Label(self.grid, text="Open or create a folder to begin." if not self.folder else "This folder is empty.", padding=18).grid()
+        if not entries:
+            empty = "No favorites in this view." if self.filter_mode.get() == "Favorite" else "No items in this view."
+            ttk.Label(self.grid, text=empty, padding=18).grid()
         self.prev.configure(state="normal" if start else "disabled")
-        self.next.configure(state="normal" if start+PAGE<len(self.entries) else "disabled")
-        self.count.configure(text=f"{start+1 if self.entries else 0}–{min(start+PAGE,len(self.entries))} of {len(self.entries)} items")
+        self.next.configure(state="normal" if start+PAGE<len(entries) else "disabled")
+        self.count.configure(text=f"{start+1 if entries else 0}–{min(start+PAGE,len(entries))} of {len(entries)} items")
         self.canvas.yview_moveto(0)
 
     def editor(self, folder):
