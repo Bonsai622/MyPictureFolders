@@ -131,18 +131,7 @@ function Get-OrientedImage([string] $file) {
   $img
 }
 
-function New-RoundedPath([single] $x, [single] $y, [single] $w, [single] $h, [single] $r) {
-  $d = 2 * $r
-  $p = New-Object System.Drawing.Drawing2D.GraphicsPath
-  $p.AddArc($x, $y, $d, $d, [single]180, [single]90)
-  $p.AddArc([single]($x + $w - $d), $y, $d, $d, [single]270, [single]90)
-  $p.AddArc([single]($x + $w - $d), [single]($y + $h - $d), $d, $d, [single]0, [single]90)
-  $p.AddArc($x, [single]($y + $h - $d), $d, $d, [single]90, [single]90)
-  $p.CloseFigure()
-  $p
-}
-
-# Crop one continuous photo across the entire folder and draw the folds over it.
+# Crop one continuous photo across the folder, then outline its perimeter.
 function New-FolderComposite([System.Drawing.Image] $photo, [int] $width = 100, [int] $height = 100,
     [int] $horizontal = 0, [int] $vertical = 0) {
   $bmp = New-Object System.Drawing.Bitmap 256, 256, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -172,28 +161,30 @@ function New-FolderComposite([System.Drawing.Image] $photo, [int] $width = 100, 
   $tex = New-Object System.Drawing.TextureBrush $scaled, ([System.Drawing.Drawing2D.WrapMode]::Clamp)
   $tex.TranslateTransform($fx, $fy)
   $silhouette = New-Object System.Drawing.Drawing2D.GraphicsPath
-  $silhouette.FillMode = 'Winding'
-  foreach ($path in @((New-RoundedPath 8 24 110 40 12), (New-RoundedPath 8 40 240 188 14), (New-RoundedPath 8 66 240 166 14))) {
-    $silhouette.AddPath($path, $false)
-    $path.Dispose()
-  }
+  # Follow the tab, shoulder, and rounded outer corners as one closed outline.
+  $silhouette.AddArc(8, 24, 24, 24, 180, 90)
+  $silhouette.AddLine(20, 24, 101, 24)
+  $silhouette.AddLine(101, 24, 119, 40)
+  $silhouette.AddLine(119, 40, 234, 40)
+  $silhouette.AddArc(220, 40, 28, 28, 270, 90)
+  $silhouette.AddLine(248, 54, 248, 218)
+  $silhouette.AddArc(220, 204, 28, 28, 0, 90)
+  $silhouette.AddLine(234, 232, 22, 232)
+  $silhouette.AddArc(8, 204, 28, 28, 90, 90)
+  $silhouette.CloseFigure()
   $g.FillPath($tex, $silhouette)
-  $silhouette.Dispose(); $tex.Dispose(); $scaled.Dispose()
 
-  # A light ridge and dark crease stay legible on both light and dark photos.
-  $highlight = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(185, 255, 255, 255)), 3
-  $shadow = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(190, 0, 0, 0)), 4
-  $g.DrawLine($highlight, 17, 67, 239, 67)
-  $g.DrawLine($shadow, 13, 80, 243, 80)
-  $g.DrawLine($highlight, 13, 84, 243, 84)
-  $highlight.Dispose(); $shadow.Dispose(); $g.Dispose()
+  $border = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(229, 197, 132)), 7
+  $border.LineJoin = 'Round'
+  $g.DrawPath($border, $silhouette)
+  $border.Dispose(); $silhouette.Dispose(); $tex.Dispose(); $scaled.Dispose(); $g.Dispose()
   $bmp
 }
 
 function Show-PicturePreview([System.Drawing.Image] $photo) {
   $dialog = New-Object System.Windows.Forms.Form
   $dialog.Text = 'Adjust folder picture'
-  $dialog.ClientSize = New-Object System.Drawing.Size 420, 478
+  $dialog.ClientSize = New-Object System.Drawing.Size 448, 528
   $dialog.StartPosition = 'CenterScreen'
   $dialog.FormBorderStyle = 'FixedDialog'
   $dialog.MaximizeBox = $false
@@ -201,7 +192,7 @@ function Show-PicturePreview([System.Drawing.Image] $photo) {
   $dialog.TopMost = $true
 
   $preview = New-Object System.Windows.Forms.PictureBox
-  $preview.SetBounds(82, 8, 256, 256)
+  $preview.SetBounds(96, 8, 256, 256)
   $dialog.Controls.Add($preview)
 
   $sliders = @{}
@@ -217,7 +208,7 @@ function Show-PicturePreview([System.Drawing.Image] $photo) {
     $label.Text = $row.Label
     $label.SetBounds(12, ($y + 6), 120, 22)
     $slider = New-Object System.Windows.Forms.TrackBar
-    $slider.SetBounds(134, $y, 270, 32)
+    $slider.SetBounds(134, $y, 298, 36)
     $slider.TickStyle = 'None'
     $slider.Minimum = $row.Minimum
     $slider.Maximum = $row.Maximum
@@ -228,12 +219,12 @@ function Show-PicturePreview([System.Drawing.Image] $photo) {
     $sliders[$row.Key] = $slider
     $dialog.Controls.Add($label)
     $dialog.Controls.Add($slider)
-    $y += 35
+    $y += 40
   }
 
   $hint = New-Object System.Windows.Forms.Label
   $hint.Text = 'Stretch an axis to make more room to move the picture.'
-  $hint.SetBounds(12, 412, 396, 20)
+  $hint.SetBounds(12, 434, 424, 38)
   $dialog.Controls.Add($hint)
 
   $redraw = {
@@ -246,15 +237,15 @@ function Show-PicturePreview([System.Drawing.Image] $photo) {
 
   $reset = New-Object System.Windows.Forms.Button
   $reset.Text = 'Reset'
-  $reset.SetBounds(12, 439, 88, 28)
+  $reset.SetBounds(12, 482, 88, 32)
   $reset.Add_Click({ foreach ($row in $rows) { $sliders[$row.Key].Value = $row.Value } })
   $apply = New-Object System.Windows.Forms.Button
   $apply.Text = 'Apply'
-  $apply.SetBounds(222, 439, 88, 28)
+  $apply.SetBounds(250, 482, 88, 32)
   $apply.DialogResult = 'OK'
   $cancel = New-Object System.Windows.Forms.Button
   $cancel.Text = 'Cancel'
-  $cancel.SetBounds(320, 439, 88, 28)
+  $cancel.SetBounds(348, 482, 88, 32)
   $cancel.DialogResult = 'Cancel'
   $dialog.Controls.AddRange(@($reset, $apply, $cancel))
   $dialog.AcceptButton = $apply

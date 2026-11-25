@@ -45,9 +45,8 @@ entries are added).
 ## Details
 
 - Works with JPG, PNG, BMP, GIF, TIFF, and ICO. Phone photos are rotated the right way up.
-- The picture fills the entire folder silhouette, including the tab and the area
-  above the front panel. Highlight and crease lines show where the folder folds.
-  The picture keeps its proportions, so its edges may be cropped.
+- The picture fills the folder silhouette, including the tab, with a manila border
+  around the outside. The default crop keeps the picture's proportions.
 - Your original picture is never changed. A small hidden `folder-picture-….ico` and the
   usual hidden `desktop.ini` are saved inside the folder — the same mechanism as
   Properties → Customize → Change Icon. Local folders use the icon's full path, so
