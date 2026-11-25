@@ -118,9 +118,7 @@ function New-RoundedPath([single] $x, [single] $y, [single] $w, [single] $h, [si
   $p
 }
 
-# Draws a 256x256 folder (tab and back in folder yellow) whose whole front panel is
-# the photo, with a folded yellow lip and crease along its top edge so it still
-# reads as a folder. Smaller icon sizes are scaled from this.
+# Crop one continuous photo across the entire folder and draw the folds over it.
 function New-FolderComposite([System.Drawing.Image] $photo) {
   $bmp = New-Object System.Drawing.Bitmap 256, 256, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -129,18 +127,7 @@ function New-FolderComposite([System.Drawing.Image] $photo) {
   $g.InterpolationMode = 'HighQualityBicubic'
   $g.PixelOffsetMode   = 'HighQuality'
 
-  $back   = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(218, 152, 40))
-  $lip    = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 200, 72))
-  $shine  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 226, 140))
-  $crease = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(170, 110, 20))
-
-  foreach ($path in @((New-RoundedPath 8 24 110 40 12), (New-RoundedPath 8 40 240 188 14))) {  # tab, back
-    $g.FillPath($back, $path); $path.Dispose()
-  }
-
-  # Front panel: the photo scaled to cover it completely (centred; the overflow on
-  # one side is trimmed so the picture is not distorted).
-  $fx = 8; $fy = 66; $fw = 240; $fh = 166
+  $fx = 8; $fy = 24; $fw = 240; $fh = 208
   $scale = [Math]::Max($fw / $photo.Width, $fh / $photo.Height)
   $srcW = $fw / $scale; $srcH = $fh / $scale
   $srcX = ($photo.Width - $srcW) / 2; $srcY = ($photo.Height - $srcH) / 2
@@ -154,21 +141,24 @@ function New-FolderComposite([System.Drawing.Image] $photo) {
     [single]$srcX, [single]$srcY, [single]$srcW, [single]$srcH, [System.Drawing.GraphicsUnit]::Pixel, $attrs)
   $sg.Dispose(); $attrs.Dispose()
 
-  # Fill the rounded front shape with the photo so its corners are smooth.
   $tex = New-Object System.Drawing.TextureBrush $scaled, ([System.Drawing.Drawing2D.WrapMode]::Clamp)
   $tex.TranslateTransform($fx, $fy)
-  $front = New-RoundedPath $fx $fy $fw $fh 14
-  $g.FillPath($tex, $front)
-  $front.Dispose(); $tex.Dispose(); $scaled.Dispose()
+  $silhouette = New-Object System.Drawing.Drawing2D.GraphicsPath
+  $silhouette.FillMode = 'Winding'
+  foreach ($path in @((New-RoundedPath 8 24 110 40 12), (New-RoundedPath 8 40 240 188 14), (New-RoundedPath 8 66 240 166 14))) {
+    $silhouette.AddPath($path, $false)
+    $path.Dispose()
+  }
+  $g.FillPath($tex, $silhouette)
+  $silhouette.Dispose(); $tex.Dispose(); $scaled.Dispose()
 
-  # The fold: a yellow lip along the top of the front, a highlight on it, and a
-  # dark crease line where it folds over onto the picture.
-  $lipPath = New-RoundedPath 8 66 240 14 7
-  $g.FillPath($lip, $lipPath); $lipPath.Dispose()
-  $g.FillRectangle($shine, 8, 73, 240, 2)
-  $g.FillRectangle($crease, 8, 80, 240, 2)
-
-  $back.Dispose(); $lip.Dispose(); $shine.Dispose(); $crease.Dispose(); $g.Dispose()
+  # A light ridge and dark crease stay legible on both light and dark photos.
+  $highlight = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(185, 255, 255, 255)), 3
+  $shadow = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(190, 0, 0, 0)), 4
+  $g.DrawLine($highlight, 17, 67, 239, 67)
+  $g.DrawLine($shadow, 13, 80, 243, 80)
+  $g.DrawLine($highlight, 13, 84, 243, 84)
+  $highlight.Dispose(); $shadow.Dispose(); $g.Dispose()
   $bmp
 }
 
