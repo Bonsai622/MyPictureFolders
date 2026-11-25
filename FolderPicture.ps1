@@ -813,10 +813,17 @@ function Install-SendTo([string] $ps, [string] $script) {
     $lnk.WindowStyle = 7   # start minimised so no console flashes up
     $lnk.Save()
   }
+  $app = $shell.CreateShortcut((Join-Path $sendTo 'MyPictureFolders.lnk'))
+  $app.TargetPath = Join-Path (Split-Path -Parent $script) 'Open MyPictureFolders.cmd'
+  $app.WorkingDirectory = Split-Path -Parent $script
+  $app.IconLocation = "$env:SystemRoot\System32\imageres.dll,-72"
+  $app.Save()
+
 }
 
 function Uninstall-SendTo {
   $sendTo = [Environment]::GetFolderPath('SendTo')
+  Remove-Item -LiteralPath (Join-Path $sendTo 'MyPictureFolders.lnk') -Force -ErrorAction SilentlyContinue
   foreach ($it in $SendToItems) {
     Remove-Item -LiteralPath (Join-Path $sendTo "$($it.Name).lnk") -Force -ErrorAction SilentlyContinue
   }

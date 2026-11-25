@@ -77,3 +77,18 @@ need to trust your NAS hostname. See
 .\FolderPicture.ps1 -Set -Folder "D:\Photos\2024 Trip" -Picture "D:\cover.jpg"
 .\FolderPicture.ps1 -Remove -Folder "D:\Photos\2024 Trip"
 ```
+
+## MyPictureFolders desktop app
+
+Run **Install Folder Picture Menu.cmd** once after updating. In Explorer select one or
+more folders and choose **Send to → MyPictureFolders**. The app remembers their actual
+paths and opens a cover editor for each. Sending a NAS folder adds it in place.
+Double-click **Open MyPictureFolders.cmd** to return to your library.
+
+The first launch creates a per-user Python environment and installs Pillow. It needs
+Windows Python 3 with Tk (3.9 or later) and internet access for initial setup.
+Choose a display name, border color, image, position and stretch. **Save cover** writes
+the artwork and settings to a .mypicturefolders.json file inside the folder, so the
+account used for the NAS share needs write access. These covers appear inside the app.
+Ordinary folders use a plain folder illustration and images have independent thumbnails.
+Use **New folder** and **Add files** to create real folders and copy files into them.
