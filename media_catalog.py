@@ -299,18 +299,22 @@ def show_catalog(browser):
         page_label.configure(text=f"Page {state['page']+1}")
         if not rows:
             ttk.Label(grid,text="No matches yet. Choose a watch folder or change the filters.",padding=16).grid()
+        folder_view = view.get() == "Folders"
+        preview_size = (131, 96) if folder_view else (98, 72)
+        columns = 6 if folder_view else 8
+        tile_width = 20 if folder_view else 15
         for i,row in enumerate(rows[:100]):
             cached = db.execute("SELECT jpg FROM previews WHERE id=?", (row["preview"],)).fetchone()
             image = ""
             if cached and cached[0]:
                 with Image.open(io.BytesIO(cached[0])) as preview:
-                    preview.thumbnail((98,72))
+                    preview.thumbnail(preview_size)
                     image = ImageTk.PhotoImage(preview)
                     photos.append(image)
             text = ("★ " if row["favorite"] else "") + ("▶ " if row["kind"]=="Video" else "") + row["name"]
-            tile = ttk.Button(grid,text=text[:20],image=image,compound="top",width=15,
+            tile = ttk.Button(grid,text=text[:20],image=image,compound="top",width=tile_width,
                               command=lambda r=row: select(r))
-            tile.grid(row=i//8,column=i%8,padx=1,pady=1,sticky="nsew")
+            tile.grid(row=i//columns,column=i%columns,padx=1,pady=1,sticky="nsew")
             tile.bind("<Double-Button-1>",lambda e,r=row: open_item(r))
         area.yview_moveto(0)
 
