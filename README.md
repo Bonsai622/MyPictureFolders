@@ -21,6 +21,11 @@ asking: a picture copied from a browser (right-click → Copy image), a screensh
 (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>), a picture copied in Paint or Photos, or a
 picture file selected in Explorer and copied with <kbd>Ctrl</kbd>+<kbd>C</kbd>.
 
+Picking an image or using the clipboard opens a live preview. Use **Stretch width**
+and **Stretch height** to resize the picture independently, and **Move left / right**
+and **Move up / down** to position it. **Reset** restores the centered crop.
+Click **Apply** when the preview looks right.
+
 Select several folders first to give them all the same picture in one go.
 
 There is also a **Folder picture** submenu in the full (classic) right-click menu: hold

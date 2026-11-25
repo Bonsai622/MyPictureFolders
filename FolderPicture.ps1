@@ -119,7 +119,8 @@ function New-RoundedPath([single] $x, [single] $y, [single] $w, [single] $h, [si
 }
 
 # Crop one continuous photo across the entire folder and draw the folds over it.
-function New-FolderComposite([System.Drawing.Image] $photo) {
+function New-FolderComposite([System.Drawing.Image] $photo, [int] $width = 100, [int] $height = 100,
+    [int] $horizontal = 0, [int] $vertical = 0) {
   $bmp = New-Object System.Drawing.Bitmap 256, 256, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
   $g.Clear([System.Drawing.Color]::Transparent)
@@ -129,8 +130,11 @@ function New-FolderComposite([System.Drawing.Image] $photo) {
 
   $fx = 8; $fy = 24; $fw = 240; $fh = 208
   $scale = [Math]::Max($fw / $photo.Width, $fh / $photo.Height)
-  $srcW = $fw / $scale; $srcH = $fh / $scale
-  $srcX = ($photo.Width - $srcW) / 2; $srcY = ($photo.Height - $srcH) / 2
+  $srcW = $fw / $scale * (100 / $width)
+  $srcH = $fh / $scale * (100 / $height)
+  # Keep the crop inside the photo, even at the ends of the movement controls.
+  $srcX = [Math]::Max(0, $photo.Width - $srcW) * (100 - $horizontal) / 200
+  $srcY = [Math]::Max(0, $photo.Height - $srcH) * (100 - $vertical) / 200
 
   $scaled = New-Object System.Drawing.Bitmap $fw, $fh, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
   $sg = [System.Drawing.Graphics]::FromImage($scaled)
@@ -160,6 +164,89 @@ function New-FolderComposite([System.Drawing.Image] $photo) {
   $g.DrawLine($highlight, 13, 84, 243, 84)
   $highlight.Dispose(); $shadow.Dispose(); $g.Dispose()
   $bmp
+}
+
+function Show-PicturePreview([System.Drawing.Image] $photo) {
+  $dialog = New-Object System.Windows.Forms.Form
+  $dialog.Text = 'Adjust folder picture'
+  $dialog.ClientSize = New-Object System.Drawing.Size 420, 478
+  $dialog.StartPosition = 'CenterScreen'
+  $dialog.FormBorderStyle = 'FixedDialog'
+  $dialog.MaximizeBox = $false
+  $dialog.MinimizeBox = $false
+  $dialog.TopMost = $true
+
+  $preview = New-Object System.Windows.Forms.PictureBox
+  $preview.SetBounds(82, 8, 256, 256)
+  $dialog.Controls.Add($preview)
+
+  $sliders = @{}
+  $rows = @(
+    @{ Key = 'Width'; Label = 'Stretch width'; Minimum = 100; Maximum = 400; Value = 100 },
+    @{ Key = 'Height'; Label = 'Stretch height'; Minimum = 100; Maximum = 400; Value = 100 },
+    @{ Key = 'Horizontal'; Label = 'Move left / right'; Minimum = -100; Maximum = 100; Value = 0 },
+    @{ Key = 'Vertical'; Label = 'Move up / down'; Minimum = -100; Maximum = 100; Value = 0 }
+  )
+  $y = 270
+  foreach ($row in $rows) {
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = $row.Label
+    $label.SetBounds(12, ($y + 6), 120, 22)
+    $slider = New-Object System.Windows.Forms.TrackBar
+    $slider.SetBounds(134, $y, 270, 32)
+    $slider.TickStyle = 'None'
+    $slider.Minimum = $row.Minimum
+    $slider.Maximum = $row.Maximum
+    $slider.Value = $row.Value
+    $slider.SmallChange = 1
+    $slider.LargeChange = 10
+    $slider.AccessibleName = $row.Label
+    $sliders[$row.Key] = $slider
+    $dialog.Controls.Add($label)
+    $dialog.Controls.Add($slider)
+    $y += 35
+  }
+
+  $hint = New-Object System.Windows.Forms.Label
+  $hint.Text = 'Stretch an axis to make more room to move the picture.'
+  $hint.SetBounds(12, 412, 396, 20)
+  $dialog.Controls.Add($hint)
+
+  $redraw = {
+    $previous = $preview.Image
+    $preview.Image = New-FolderComposite $photo $sliders.Width.Value $sliders.Height.Value `
+      $sliders.Horizontal.Value $sliders.Vertical.Value
+    if ($previous) { $previous.Dispose() }
+  }
+  foreach ($slider in $sliders.Values) { $slider.Add_ValueChanged($redraw) }
+
+  $reset = New-Object System.Windows.Forms.Button
+  $reset.Text = 'Reset'
+  $reset.SetBounds(12, 439, 88, 28)
+  $reset.Add_Click({ foreach ($row in $rows) { $sliders[$row.Key].Value = $row.Value } })
+  $apply = New-Object System.Windows.Forms.Button
+  $apply.Text = 'Apply'
+  $apply.SetBounds(222, 439, 88, 28)
+  $apply.DialogResult = 'OK'
+  $cancel = New-Object System.Windows.Forms.Button
+  $cancel.Text = 'Cancel'
+  $cancel.SetBounds(320, 439, 88, 28)
+  $cancel.DialogResult = 'Cancel'
+  $dialog.Controls.AddRange(@($reset, $apply, $cancel))
+  $dialog.AcceptButton = $apply
+  $dialog.CancelButton = $cancel
+
+  try {
+    & $redraw
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+      $result = $preview.Image
+      $preview.Image = $null
+      $result
+    }
+  } finally {
+    if ($preview.Image) { $preview.Image.Dispose() }
+    $dialog.Dispose()
+  }
 }
 
 # A 32-bit icon bitmap: BITMAPINFOHEADER (height doubled for the mask), BGRA rows
@@ -348,12 +435,7 @@ function Get-ClipboardPicture {
   throw "There's no picture on the clipboard.`n`nCopy a picture first - for example right-click a picture in your browser and choose Copy image, take a screenshot with Win+Shift+S, or select a picture file in Explorer and press Ctrl+C."
 }
 
-function Set-FolderPicture([string] $dir, [string] $file) {
-
-  try { $img = Get-OrientedImage $file }
-  catch { throw "Windows can't read that picture:`n$file`n`nTry a JPG, PNG, BMP, GIF or TIFF." }
-  try { $folderImg = New-FolderComposite $img } finally { $img.Dispose() }
-  try { $bytes = New-IconBytes $folderImg } finally { $folderImg.Dispose() }
+function Set-FolderPicture([string] $dir, [byte[]] $bytes) {
 
   # A fresh file name every time - Explorer caches icons by path, so reusing a
   # name would keep showing the old picture.
@@ -509,10 +591,21 @@ try {
     'Set' {
       $dirs = @(@($Folder) + @($MoreFolders) | Where-Object { $_ } | ForEach-Object { Resolve-Folder $_ })
       $clip = $null
+      $adjustPicture = $Clipboard -or -not $Picture
       if ($Clipboard) { $clip = Get-ClipboardPicture; $Picture = $clip.Path }
       elseif (-not $Picture) { $Picture = Select-Picture $dirs }
       try {
-        if ($Picture) { foreach ($d in $dirs) { Set-FolderPicture $d $Picture } }
+        if ($Picture) {
+          try { $img = Get-OrientedImage $Picture }
+          catch { throw "Windows can't read that picture:`n$Picture`n`nTry a JPG, PNG, BMP, GIF or TIFF." }
+          try {
+            $folderImg = if ($adjustPicture) { Show-PicturePreview $img } else { New-FolderComposite $img }
+          } finally { $img.Dispose() }
+          if ($folderImg) {
+            try { $bytes = New-IconBytes $folderImg } finally { $folderImg.Dispose() }
+            foreach ($d in $dirs) { Set-FolderPicture $d $bytes }
+          }
+        }
       } finally {
         if ($clip -and $clip.Temp) { Remove-Item -LiteralPath $clip.Path -Force -ErrorAction SilentlyContinue }
       }
