@@ -441,8 +441,8 @@ function Select-Picture([string[]] $dirs) {
 
   $navigation = New-Object System.Windows.Forms.TableLayoutPanel
   $navigation.Dock = 'Fill'
-  $navigation.ColumnCount = 4
-  foreach ($width in 50, 85) {
+  $navigation.ColumnCount = 6
+  foreach ($width in 50, 85, 75, 90) {
     [void]$navigation.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle 'Absolute', $width))
   }
   [void]$navigation.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle 'Percent', 100))
@@ -452,6 +452,11 @@ function Select-Picture([string[]] $dirs) {
   $up.Text = 'Up'
   $pictures = New-Object System.Windows.Forms.Button
   $pictures.Text = 'Pictures'
+  $drives = New-Object System.Windows.Forms.Button
+  $drives.Text = 'Drives'
+  $driveMenu = New-Object System.Windows.Forms.ContextMenuStrip
+  $paste = New-Object System.Windows.Forms.Button
+  $paste.Text = 'Clipboard'
   $address = New-Object System.Windows.Forms.TextBox
   $address.Dock = 'Fill'
   $address.AccessibleName = 'Picture folder path'
@@ -459,8 +464,10 @@ function Select-Picture([string[]] $dirs) {
   $go.Text = 'Go'
   $navigation.Controls.Add($up, 0, 0)
   $navigation.Controls.Add($pictures, 1, 0)
-  $navigation.Controls.Add($address, 2, 0)
-  $navigation.Controls.Add($go, 3, 0)
+  $navigation.Controls.Add($drives, 2, 0)
+  $navigation.Controls.Add($paste, 3, 0)
+  $navigation.Controls.Add($address, 4, 0)
+  $navigation.Controls.Add($go, 5, 0)
 
   $split = New-Object System.Windows.Forms.SplitContainer
   $split.Dock = 'Fill'
@@ -569,12 +576,32 @@ function Select-Picture([string[]] $dirs) {
   }
   $choose = {
     if ($gallery.SelectedItems.Count) {
-      $state.Selection = [string]$gallery.SelectedItems[0].Tag
+      $state.Selection = @{ Path = [string]$gallery.SelectedItems[0].Tag; Temp = $false }
       $dialog.DialogResult = 'OK'
     }
   }
   $up.Add_Click({ & $navigate (Split-Path -Parent $state.Path) })
   $pictures.Add_Click({ & $navigate ([Environment]::GetFolderPath('MyPictures')) })
+  $drives.Add_Click({
+    $driveMenu.Items.Clear()
+    foreach ($root in [System.IO.Directory]::GetLogicalDrives()) {
+      $entry = $driveMenu.Items.Add($root)
+      $entry.Tag = $root
+    }
+    $driveMenu.Show($drives, 0, $drives.Height)
+  })
+  $driveMenu.Add_ItemClicked({
+    param($sender, $eventArgs)
+    & $navigate $eventArgs.ClickedItem.Tag
+  })
+  $paste.Add_Click({
+    try {
+      $state.Selection = Get-ClipboardPicture
+      $dialog.DialogResult = 'OK'
+    } catch {
+      [void][System.Windows.Forms.MessageBox]::Show($dialog, $_.Exception.Message, 'Clipboard', 'OK', 'Information')
+    }
+  })
   $go.Add_Click({ & $navigate $address.Text })
   $address.Add_KeyDown({
     param($sender, $eventArgs)
@@ -592,11 +619,10 @@ function Select-Picture([string[]] $dirs) {
   $dialog.AcceptButton = $open
 
   try {
-    $initial = [Environment]::GetFolderPath('MyPictures')
-    if (-not $initial -or -not (Test-Path -LiteralPath $initial -PathType Container)) { $initial = $dirs[0] }
-    & $navigate $initial
+    & $navigate $dirs[0]
     if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $state.Selection }
   } finally {
+    $driveMenu.Dispose()
     if ($gallery.LargeImageList) { $gallery.LargeImageList.Dispose() }
     $dialog.Dispose()
   }
@@ -807,11 +833,12 @@ try {
     'Uninstall' { Uninstall-Menu; Show-Message 'The "Folder picture" menu has been removed. Folders that already have a picture keep it.' }
     'Set' {
       $dirs = @(@($Folder) + @($MoreFolders) | Where-Object { $_ } | ForEach-Object { Resolve-Folder $_ })
-      $clip = $null
+      $selection = $null
       $adjustPicture = $Clipboard -or -not $Picture
-      if ($Clipboard) { $clip = Get-ClipboardPicture; $Picture = $clip.Path }
-      elseif (-not $Picture) { $Picture = Select-Picture $dirs }
       try {
+        if ($Clipboard) { $selection = Get-ClipboardPicture }
+        elseif (-not $Picture) { $selection = Select-Picture $dirs }
+        if ($selection) { $Picture = $selection.Path }
         if ($Picture) {
           try { $img = Get-OrientedImage $Picture }
           catch { throw "Windows can't read that picture:`n$Picture`n`nTry a JPG, PNG, BMP, GIF or TIFF." }
@@ -824,7 +851,7 @@ try {
           }
         }
       } finally {
-        if ($clip -and $clip.Temp) { Remove-Item -LiteralPath $clip.Path -Force -ErrorAction SilentlyContinue }
+        if ($selection -and $selection.Temp) { Remove-Item -LiteralPath $selection.Path -Force -ErrorAction SilentlyContinue }
       }
     }
     'Remove' {
