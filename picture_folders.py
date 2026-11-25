@@ -117,12 +117,13 @@ def model_folders(entries):
 MODEL_ROW_HEIGHT = 132
 
 
-def model_window(count, width, height, top):
-    columns = max(1, width // 145)
+def model_window(count, width, height, top, scale=1):
+    row_height = MODEL_ROW_HEIGHT * scale
+    columns = max(1, width // (145 * scale))
     rows = (count + columns - 1) // columns
-    first = min(max(0, rows - 1), max(0, int(top // MODEL_ROW_HEIGHT) - 1))
-    end = min(rows, math.ceil((top + height) / MODEL_ROW_HEIGHT) + 1)
-    return columns, first * columns, min(count, end * columns), rows * MODEL_ROW_HEIGHT
+    first = min(max(0, rows - 1), max(0, int(top // row_height) - 1))
+    end = min(rows, math.ceil((top + height) / row_height) + 1)
+    return columns, first * columns, min(count, end * columns), rows * row_height
 
 
 def favorite_key(entry):
@@ -150,6 +151,8 @@ class Browser:
         root.title("MyPictureFolders")
         root.geometry("1000x720")
         root.minsize(700, 480)
+        root.bind("<F11>", lambda e: root.attributes("-fullscreen", not root.tk.getboolean(root.attributes("-fullscreen"))))
+        root.bind("<Escape>", lambda e: root.attributes("-fullscreen", False))
         root.report_callback_exception = lambda typ, exc, tb: messagebox.showerror("MyPictureFolders", str(exc))
         storage = Path(os.getenv("LOCALAPPDATA", Path.home())) / "MyPictureFolders"
         storage.mkdir(parents=True, exist_ok=True)
@@ -357,16 +360,21 @@ class Browser:
         width, height = self.canvas.winfo_width(), self.canvas.winfo_height()
         if width < 10 or height < 10:
             return
+        model_scale = 1
         if self.group_label == "Models":
-            columns, start, stop, total = model_window(len(self.model_entries), width, height, self.canvas.canvasy(0))
-            signature = (width, height, start, stop)
+            if self.root.state() == "zoomed" or self.root.tk.getboolean(self.root.attributes("-fullscreen")):
+                model_scale = 2
+            row_height = MODEL_ROW_HEIGHT * model_scale
+            columns, start, stop, total = model_window(
+                len(self.model_entries), width, height, self.canvas.canvasy(0), model_scale)
+            signature = (width, height, start, stop, model_scale)
             if signature == self.model_range:
                 return
             self.model_range = signature
             self.canvas.configure(scrollregion=(0, 0, width, max(height, total)))
-            self.canvas.coords(self.window, 0, (start // columns) * MODEL_ROW_HEIGHT)
+            self.canvas.coords(self.window, 0, (start // columns) * row_height)
             self.render_tiles(self.model_entries[start:stop], self.model_favorites)
-            cell_w, cell_h = width // columns, MODEL_ROW_HEIGHT
+            cell_w, cell_h = width // columns, row_height
         else:
             columns, cell_w, cell_h = grid_layout(len(self.tiles), width, height)
         self.canvas.itemconfigure(self.window, width=width)
@@ -377,7 +385,10 @@ class Browser:
             button.configure(text=title if len(title)<=chars else title[:chars-1]+"…")
             if source is not None:
                 image = source.copy()
-                image.thumbnail((max(1, cell_w-12), max(1, cell_h-28)), Image.Resampling.LANCZOS)
+                box = (max(1, cell_w-12), max(1, cell_h-28))
+                if self.group_label == "Models" and model_scale == 1:
+                    box = (min(128, box[0]), min(100, box[1]))
+                image.thumbnail(box, Image.Resampling.LANCZOS)
                 button.bitmap = ImageTk.PhotoImage(image)
                 button.configure(image=button.bitmap)
 
@@ -464,7 +475,7 @@ class Browser:
                     art = load_image(path, 128)
             except (ValueError, OSError):
                 art = None
-            if art is not None:
+            if art is not None and not group:
                 art.thumbnail((128, 100), Image.Resampling.LANCZOS)
             action = self.open_group if group else self.open_directory if directory else os.startfile
             button = ttk.Button(card, compound="top", command=lambda p=path, fn=action: fn(p))
