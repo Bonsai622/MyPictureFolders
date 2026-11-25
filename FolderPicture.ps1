@@ -6,6 +6,7 @@
     FolderPicture.ps1 -Uninstall               remove it again
     FolderPicture.ps1 -Set    -Folder <path>   pick a picture and make it that folder's icon
     FolderPicture.ps1 -Set    -Folder <path> -Picture <file>   same, without the file picker
+    FolderPicture.ps1 -Set -Clipboard -Folder <path>   use the picture on the clipboard
     FolderPicture.ps1 -Remove -Folder <path>   put the normal folder icon back
     Several folders can follow -Folder (that is what "Send to" passes when you select
     more than one); -Set then asks for one picture and puts it on all of them.
@@ -25,6 +26,7 @@ param(
   [Parameter(ParameterSetName = 'Set', Mandatory)]
   [Parameter(ParameterSetName = 'Remove', Mandatory)]    [string] $Folder,
   [Parameter(ParameterSetName = 'Set')]                  [string] $Picture,
+  [Parameter(ParameterSetName = 'Set')]                  [switch] $Clipboard,
   [Parameter(ParameterSetName = 'Set', ValueFromRemainingArguments)]
   [Parameter(ParameterSetName = 'Remove', ValueFromRemainingArguments)] [string[]] $MoreFolders,
   [switch] $Quiet
@@ -317,6 +319,45 @@ function Select-Picture([string[]] $dirs) {
     if ($ok) { $dlg.FileName }
 }
 
+# Saves whatever picture is on the clipboard to a temporary PNG and returns its path.
+# Handles: a picture file copied in Explorer (Ctrl+C on the file), a picture copied
+# from a browser, Paint, Photos, a screenshot (Win+Shift+S / PrtScn), or a copied
+# path to a picture file.
+function Get-ClipboardPicture {
+  $imageExt = '\.(jpe?g|jfif|png|bmp|gif|tiff?|ico)$'
+  $cb = [System.Windows.Forms.Clipboard]
+
+  if ($cb::ContainsFileDropList()) {
+    $file = @($cb::GetFileDropList()) | Where-Object { $_ -match $imageExt } | Select-Object -First 1
+    if ($file) { return @{ Path = $file; Temp = $false } }
+  }
+
+  $img = $null
+  $data = $cb::GetDataObject()
+  if ($data -and $data.GetDataPresent('PNG')) {
+    # Browsers put a PNG copy here, which keeps transparency the plain bitmap loses.
+    $png = $data.GetData('PNG')
+    if ($png -is [System.IO.Stream]) {
+      try { $img = [System.Drawing.Image]::FromStream($png) } catch { $img = $null }
+    }
+  }
+  if (-not $img -and $cb::ContainsImage()) { $img = $cb::GetImage() }
+  if ($img) {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("folder-picture-clipboard-{0}.png" -f [guid]::NewGuid())
+    try { $img.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Png) } finally { $img.Dispose() }
+    return @{ Path = $tmp; Temp = $true }
+  }
+
+  if ($cb::ContainsText()) {
+    $text = $cb::GetText().Trim().Trim('"')
+    if ($text -match $imageExt -and (Test-Path -LiteralPath $text -PathType Leaf)) {
+      return @{ Path = $text; Temp = $false }
+    }
+  }
+
+  throw "There's no picture on the clipboard.`n`nCopy a picture first - for example right-click a picture in your browser and choose Copy image, take a screenshot with Win+Shift+S, or select a picture file in Explorer and press Ctrl+C."
+}
+
 function Set-FolderPicture([string] $dir, [string] $file) {
 
   try { $img = Get-OrientedImage $file }
@@ -381,7 +422,8 @@ function Remove-MenuKeys([string[]] $names) {
 }
 
 function Install-Menu {
-  Remove-MenuKeys $OldMenuKeys
+  # Start clean so menu items renamed or removed in newer versions don't linger.
+  Remove-MenuKeys (@($MenuKey) + $OldMenuKeys)
   $script = $PSCommandPath
   Unblock-File -LiteralPath $script -ErrorAction SilentlyContinue
   $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -399,7 +441,8 @@ function Install-Menu {
 
     $items = @(
       @{ Key = '1set';    Label = 'Set picture...';      Icon = 'imageres.dll,-72'; Args = '-Set -Folder "%V"' },
-      @{ Key = '2remove'; Label = 'Remove picture';      Icon = 'shell32.dll,131'; Args = '-Remove -Folder "%V"' }
+      @{ Key = '2clip';   Label = 'Set from clipboard';  Icon = 'imageres.dll,-5308'; Args = '-Set -Clipboard -Folder "%V"' },
+      @{ Key = '3remove'; Label = 'Remove picture';      Icon = 'shell32.dll,131'; Args = '-Remove -Folder "%V"' }
     )
     foreach ($it in $items) {
       $k = "$menu\shell\$($it.Key)"
@@ -416,6 +459,7 @@ function Install-Menu {
 # the Windows 11 right-click menu. Send to adds the selected folder path(s) after -Folder.
 $SendToItems = @(
   @{ Name = 'Folder picture - Set';    Args = '-Set -Folder';    Icon = 'imageres.dll,-72' },
+  @{ Name = 'Folder picture - From clipboard'; Args = '-Set -Clipboard -Folder'; Icon = 'imageres.dll,-5308' },
   @{ Name = 'Folder picture - Remove'; Args = '-Remove -Folder'; Icon = 'shell32.dll,131' }
 )
 
@@ -446,12 +490,18 @@ function Uninstall-Menu {
 
 try {
   switch ($PSCmdlet.ParameterSetName) {
-    'Install'   { Install-Menu;   Show-Message "Done. Right-click any folder, then:`n`n  Send to > Folder picture - Set`n`nor hold Shift while right-clicking and choose Folder picture." }
+    'Install'   { Install-Menu;   Show-Message "Done. Right-click any folder, then:`n`n  Send to > Folder picture - Set`n  Send to > Folder picture - From clipboard`n`nor hold Shift while right-clicking and choose Folder picture." }
     'Uninstall' { Uninstall-Menu; Show-Message 'The "Folder picture" menu has been removed. Folders that already have a picture keep it.' }
     'Set' {
       $dirs = @(@($Folder) + @($MoreFolders) | Where-Object { $_ } | ForEach-Object { Resolve-Folder $_ })
-      if (-not $Picture) { $Picture = Select-Picture $dirs }
-      if ($Picture) { foreach ($d in $dirs) { Set-FolderPicture $d $Picture } }
+      $clip = $null
+      if ($Clipboard) { $clip = Get-ClipboardPicture; $Picture = $clip.Path }
+      elseif (-not $Picture) { $Picture = Select-Picture $dirs }
+      try {
+        if ($Picture) { foreach ($d in $dirs) { Set-FolderPicture $d $Picture } }
+      } finally {
+        if ($clip -and $clip.Temp) { Remove-Item -LiteralPath $clip.Path -Force -ErrorAction SilentlyContinue }
+      }
     }
     'Remove' {
       $dirs = @(@($Folder) + @($MoreFolders) | Where-Object { $_ } | ForEach-Object { Resolve-Folder $_ })

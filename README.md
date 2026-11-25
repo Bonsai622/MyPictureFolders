@@ -16,6 +16,11 @@ Right-click any folder → **Send to** → **Folder picture - Set**, choose an i
 folder's icon becomes that picture (best seen in Medium/Large icons view).
 **Folder picture - Remove** puts the normal folder icon back.
 
+**Folder picture - From clipboard** uses whatever picture you last copied instead of
+asking: a picture copied from a browser (right-click → Copy image), a screenshot
+(<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>), a picture copied in Paint or Photos, or a
+picture file selected in Explorer and copied with <kbd>Ctrl</kbd>+<kbd>C</kbd>.
+
 Select several folders first to give them all the same picture in one go.
 
 There is also a **Folder picture** submenu in the full (classic) right-click menu: hold
@@ -29,7 +34,8 @@ cd C:\Projects\MyPictureFolders
 git pull
 ```
 
-Then double-click **`Install Folder Picture Menu.cmd`** again.
+Then double-click **`Install Folder Picture Menu.cmd`** again (needed whenever new menu
+entries are added).
 
 ## Details
 
