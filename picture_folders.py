@@ -15,11 +15,12 @@ import tempfile
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
-from media_catalog import connect, migrate_model_keys, person_name, set_favorite, show_catalog
+from picture_viewer import PictureViewer
+from media_catalog import PHOTOS, connect, migrate_model_keys, person_name, set_favorite, show_catalog
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 META = ".mypicturefolders.json"
-PICTURES = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico"}
+PICTURES = PHOTOS | {".ico"}
 DEFAULT = {"title": "", "color": "#dbb675", "x": 50, "y": 50, "width": 100, "height": 100}
 PAGE = 100
 
@@ -152,7 +153,7 @@ class Browser:
         root.geometry("1000x720")
         root.minsize(700, 480)
         root.bind("<F11>", lambda e: root.attributes("-fullscreen", not root.tk.getboolean(root.attributes("-fullscreen"))))
-        root.bind("<Escape>", lambda e: root.attributes("-fullscreen", False))
+        root.bind("<Escape>", lambda e: self.up())
         root.report_callback_exception = lambda typ, exc, tb: messagebox.showerror("MyPictureFolders", str(exc))
         storage = Path(os.getenv("LOCALAPPDATA", Path.home())) / "MyPictureFolders"
         storage.mkdir(parents=True, exist_ok=True)
@@ -327,6 +328,14 @@ class Browser:
         else:
             self.enter(folder)
 
+    def open_file(self, path):
+        if path.suffix.lower() in PICTURES:
+            pictures = [p for p in self.visible_entries if isinstance(p, Path)
+                        and p.suffix.lower() in PICTURES and not self.directory_flags.get(p, False)]
+            PictureViewer(self.root, pictures, path)
+        else:
+            os.startfile(path)
+
     def turn(self, step):
         self.page += step
         self.draw()
@@ -434,6 +443,7 @@ class Browser:
         self.location.configure(text=str(self.group_label or self.folder or "My folders"))
         favorites = {(r[0], r[1].casefold()) for r in self.favorite_db.execute("SELECT kind,name FROM favorites")}
         entries = self.view_entries(favorites)
+        self.visible_entries = entries
         self.model_range = None
         if self.group_label == "Models":
             self.prev.pack_forget()
@@ -478,7 +488,7 @@ class Browser:
                 art = None
             if art is not None and not group:
                 art.thumbnail((128, 100), Image.Resampling.LANCZOS)
-            action = self.open_group if group else self.open_directory if directory else os.startfile
+            action = self.open_group if group else self.open_directory if directory else self.open_file
             button = ttk.Button(card, compound="top", command=lambda p=path, fn=action: fn(p))
             button.place(x=1, y=1, relwidth=1, relheight=1, width=-2, height=-2)
             detail = f"{path.name} · {len(path.sets)} sets" if group else str(path)

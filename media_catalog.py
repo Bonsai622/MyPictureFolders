@@ -251,7 +251,7 @@ if __name__ == "__main__" and "--scan" in sys.argv:
     scan(storage())
 
 
-def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, parent="", sort="Folder name", offset=0):
+def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, parent="", sort="Folder name", offset=0, photo_paths=False):
     albums = view == "Folders"
     table = "albums" if albums else "media"
     where = ["m.root=?"]
@@ -284,6 +284,9 @@ def catalog_page(db, root, view="Folders", person="", tag="", favorites=False, p
         order = "m.name,m.id"
     columns = ("EXISTS(SELECT 1 FROM favorites f WHERE f.kind='folder' AND f.name=m.path) AS favorite,'Folder' AS kind,(SELECT f.id FROM media f WHERE f.root=m.root AND f.parent=m.path ORDER BY f.name,f.id LIMIT 1) AS preview"
                if albums else "0 AS favorite,m.kind,m.id AS preview")
+    if photo_paths:
+        return [r[0] for r in db.execute("SELECT m.path FROM media m WHERE " + " AND ".join(where)
+                                          + f" AND m.kind='Photo' ORDER BY {order}", args)]
     return db.execute(f"SELECT m.id,m.name,m.path,m.person,{columns} FROM {table} m WHERE "
                       + " AND ".join(where) + f" ORDER BY {order} LIMIT 101 OFFSET ?", args+[offset]).fetchall()
 
@@ -292,6 +295,7 @@ def show_catalog(browser):
     import tkinter as tk
     from tkinter import filedialog, messagebox, simpledialog, ttk
     from PIL import ImageTk
+    from picture_viewer import PictureViewer
     existing = getattr(browser, "catalog_window", None)
     if existing and existing.winfo_exists():
         existing.lift()
@@ -332,7 +336,7 @@ def show_catalog(browser):
         if reset:
             state["page"] = 0
         state["selected"] = None
-        selection.set("Click to select · Double-click to open")
+        selection.set("Click pictures to view · Double-click folders or videos to open")
         for child in grid.winfo_children():
             child.destroy()
         photos.clear()
@@ -357,10 +361,16 @@ def show_catalog(browser):
                     photos.append(image)
             text = ("♥ " if row["favorite"] else "") + ("▶ " if row["kind"]=="Video" else "") + row["name"]
             tile = ttk.Button(grid,text=text[:20],image=image,compound="top",width=tile_width,
-                              command=lambda r=row: select(r))
+                              command=lambda r=row: click_tile(r))
             tile.grid(row=i//columns,column=i%columns,padx=1,pady=1,sticky="nsew")
-            tile.bind("<Double-Button-1>",lambda e,r=row: open_item(r))
+            if row["kind"] != "Photo":
+                tile.bind("<Double-Button-1>",lambda e,r=row: open_item(r))
         area.yview_moveto(0)
+
+    def click_tile(row):
+        select(row)
+        if row["kind"] == "Photo":
+            open_item(row)
 
     def select(row):
         state["selected"] = row
@@ -373,6 +383,11 @@ def show_catalog(browser):
             state["parent"] = row["path"]
             view.set("All media")
             refresh(True)
+        elif row["kind"] == "Photo":
+            paths = catalog_page(db,option(db,"root"),view.get(),person.get().strip(),tag.get().strip(),
+                                 favorites.get(),state["parent"],sort.get(),photo_paths=True)
+            if row["path"] in paths:
+                PictureViewer(win, paths, row["path"])
         else:
             os.startfile(row["path"])
 
@@ -469,6 +484,16 @@ def show_catalog(browser):
         db.close()
         win.destroy()
 
+    def go_back(event):
+        if state["parent"]:
+            state["parent"] = ""
+            view.set("Folders")
+            refresh(True)
+        else:
+            close()
+        return "break"
+
+    win.bind("<Escape>", go_back)
     win.protocol("WM_DELETE_WINDOW",close)
     refresh(True)
     poll()
