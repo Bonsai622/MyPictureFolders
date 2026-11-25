@@ -46,11 +46,22 @@ entries are added).
   bottom) when its shape doesn't match the folder front.
 - Your original picture is never changed. A small hidden `folder-picture-….ico` and the
   usual hidden `desktop.ini` are saved inside the folder — the same mechanism as
-  Properties → Customize → Change Icon. Like Windows' own setting, it records the icon's
-  full path, so if you move or rename the folder, set the picture again.
+  Properties → Customize → Change Icon. Local folders use the icon's full path, so
+  apply the picture again after moving or renaming a local folder. Network shares use
+  a relative icon path so the same icon file can be found through different mappings.
 - Drives (like `C:\`) can't be given a picture — only folders.
 - To take the menus away, run **`Uninstall Folder Picture Menu.cmd`**. Folders that already
   have a picture keep it.
+
+## NAS and network shares
+
+After updating from an older version, apply the picture again to the NAS folder to rewrite
+its existing icon settings. Refresh the parent folder in Explorer to check the result.
+
+Windows security updates can block folder customization from untrusted network sources.
+If the icon works on a local folder but still does not show on your NAS, Windows may
+need to trust your NAS hostname. See
+[Microsoft's guidance on custom folder icons after the June 2026 security update](https://support.microsoft.com/en-us/servicing/os/windows/docs/2026/06/custom-folder-icons-or-localized-folder-names-might-not-appear-after-installing-the-june-2026-window).
 
 ## From a terminal
 

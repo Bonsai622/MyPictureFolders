@@ -374,12 +374,19 @@ function Set-FolderPicture([string] $dir, [string] $file) {
 
   $iniPath = Join-Path $dir 'desktop.ini'
   $ini = Get-IniWithoutIcon $iniPath
-  # Full path, the same way Windows' own Properties > Customize > Change Icon writes it.
-  $entry = "IconResource=$iconPath,0"
-  if ($ini.InsertAt -ge 0) {
-    $ini.Lines.Insert($ini.InsertAt, $entry)
+  # A relative IconFile works across drive mappings and UNC paths to the same share.
+  $root = [System.IO.Path]::GetPathRoot($dir)
+  $isNetwork = $dir.StartsWith('\\') -or
+    ([System.IO.DriveInfo]::new($root).DriveType -eq [System.IO.DriveType]::Network)
+  if ($isNetwork) {
+    $entries = [string[]]@("IconFile=$iconName", 'IconIndex=0')
   } else {
-    $ini.Lines.Insert(0, $entry)
+    $entries = [string[]]@("IconResource=$iconPath,0")
+  }
+  if ($ini.InsertAt -ge 0) {
+    $ini.Lines.InsertRange($ini.InsertAt, $entries)
+  } else {
+    $ini.Lines.InsertRange(0, $entries)
     $ini.Lines.Insert(0, '[.ShellClassInfo]')
   }
   Write-DesktopIni $iniPath $ini.Lines.ToArray()
