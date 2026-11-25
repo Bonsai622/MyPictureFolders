@@ -1,4 +1,5 @@
 """A visual browser for real folders. Each folder owns its portable cover."""
+from dataclasses import dataclass
 import base64
 import io
 import json
@@ -88,6 +89,29 @@ def folder_art(data, photo=None):
     return tile
 
 
+@dataclass
+class ModelFolder:
+    name: str
+    sets: list
+
+
+def model_folders(entries):
+    groups = {}
+    loose = []
+    for path in entries:
+        if not path.is_dir():
+            loose.append(path)
+            continue
+        name = person_name(path.name) or "Unassigned"
+        key = name.casefold()
+        if key not in groups:
+            groups[key] = ModelFolder(name, [])
+        groups[key].sets.append(path)
+    for group in groups.values():
+        group.sets.sort(key=lambda path: (path.name.casefold(), str(path)))
+    return [groups[key] for key in sorted(groups)] + loose
+
+
 class Browser:
     def __init__(self, root, incoming):
         self.root = root
@@ -104,6 +128,8 @@ class Browser:
         self.tiles = []
         self.layout_job = None
         self.pending = []
+        self.group_history = []
+        self.group_label = ""
         for arg in incoming:
             p = Path(arg).absolute()
             if p.is_dir():
@@ -113,7 +139,7 @@ class Browser:
         self.bar.pack(fill="x")
         for title, action in [("Media catalog", lambda: show_catalog(self)), ("Library", self.home), ("Up", self.up), ("Open folder…", self.browse),
                               ("New folder…", self.create), ("Add files…", self.add_files),
-                              ("Edit cover…", self.edit_current), ("Sort by Model", self.sort_by_model)]:
+                              ("Edit cover…", self.edit_current), ("Group by Model", self.group_by_model)]:
             ttk.Button(self.bar, text=title, width=0, command=action).pack(side="left", padx=2)
         self.location = ttk.Label(root, padding=(12, 4))
         self.location.pack(fill="x")
@@ -155,6 +181,10 @@ class Browser:
         self.enter(None)
 
     def up(self):
+        if self.group_history:
+            self.folder, self.entries, self.page, self.group_label = self.group_history.pop()
+            self.draw()
+            return
         self.enter(self.folder.parent if self.folder and self.folder != self.folder.parent else None)
 
     def browse(self):
@@ -212,23 +242,36 @@ class Browser:
         else:
             messagebox.showinfo("Edit cover", "Open a folder or use its Edit cover button.")
 
-    def sort_by_model(self):
-        def sort_key(path):
-            name = path.name.casefold()
-            if self.folder is not None and not path.is_dir():
-                return (2, "", name)
-            model = person_name(name)
-            return (0 if model else 1, model, name)
+    def remember_view(self):
+        self.group_history.append((self.folder, self.entries, self.page, self.group_label))
 
-        self.entries.sort(key=sort_key)
-        self.page = 0
+    def group_by_model(self):
+        if self.group_label:
+            return
+        entries = model_folders(self.entries)
+        self.remember_view()
+        self.folder, self.entries, self.page = None, entries, 0
+        self.group_label = "Models"
         self.draw()
+
+    def open_group(self, group):
+        self.remember_view()
+        self.folder, self.entries, self.page = None, group.sets, 0
+        self.group_label = f"Models / {group.name}"
+        self.draw()
+
+    def open_directory(self, folder):
+        if self.group_history:
+            self.remember_view()
+            self.enter(folder, keep_history=True)
+        else:
+            self.enter(folder)
 
     def turn(self, step):
         self.page += step
         self.draw()
 
-    def enter(self, folder):
+    def enter(self, folder, keep_history=False):
         if folder:
             entries = sorted((p for p in folder.iterdir() if p.name != META
                               and not p.name.startswith(".mypf-") and p.name.lower() != "desktop.ini"
@@ -236,6 +279,9 @@ class Browser:
                              key=lambda p: (not p.is_dir(), p.name.casefold()))
         else:
             entries = [Path(r[0]) for r in self.db.execute("SELECT path FROM folders ORDER BY path")]
+        if not keep_history:
+            self.group_history.clear()
+        self.group_label = ""
         self.entries, self.folder, self.page = entries, folder, 0
         self.draw()
 
@@ -266,15 +312,18 @@ class Browser:
         for widget in self.grid.winfo_children():
             widget.destroy()
         self.tiles.clear()
-        self.location.configure(text=str(self.folder or "My folders"))
+        self.location.configure(text=str(self.group_label or self.folder or "My folders"))
         start = self.page * PAGE
         for i, path in enumerate(self.entries[start:start+PAGE]):
             card = ttk.Frame(self.grid)
-            directory = path.is_dir()
+            group = isinstance(path, ModelFolder)
+            directory = not group and path.is_dir()
             title = path.name or str(path)
             art = None
             try:
-                if directory:
+                if group:
+                    art = folder_art(DEFAULT)
+                elif directory:
                     data = settings(path)
                     title = data["title"] or title
                     art = folder_art(data)
@@ -284,11 +333,12 @@ class Browser:
                 art = None
             if art is not None:
                 art.thumbnail((128, 100), Image.Resampling.LANCZOS)
-            action = self.enter if directory else os.startfile
+            action = self.open_group if group else self.open_directory if directory else os.startfile
             button = ttk.Button(card, compound="top", command=lambda p=path, fn=action: fn(p))
             button.place(x=1, y=1, relwidth=1, relheight=1, width=-2, height=-2)
-            button.bind("<Enter>", lambda e, p=path: self.location.configure(text=str(p)))
-            button.bind("<Leave>", lambda e: self.location.configure(text=str(self.folder or "My folders")))
+            detail = f"{path.name} · {len(path.sets)} sets" if group else str(path)
+            button.bind("<Enter>", lambda e, value=detail: self.location.configure(text=value))
+            button.bind("<Leave>", lambda e: self.location.configure(text=str(self.group_label or self.folder or "My folders")))
             if directory:
                 edit = ttk.Button(card, text="✎", width=2, command=lambda p=path: self.editor(p))
                 edit.place(relx=1, x=-2, y=2, anchor="ne")
