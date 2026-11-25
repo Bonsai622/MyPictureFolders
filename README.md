@@ -21,6 +21,8 @@ asking: a picture copied from a browser (right-click → Copy image), a screensh
 (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>), a picture copied in Paint or Photos, or a
 picture file selected in Explorer and copied with <kbd>Ctrl</kbd>+<kbd>C</kbd>.
 
+The picture picker displays thumbnails even when Explorer is set to always show icons.
+
 Picking an image or using the clipboard opens a live preview. Use **Stretch width**
 and **Stretch height** to resize the picture independently, and **Move left / right**
 and **Move up / down** to position it. **Reset** restores the centered crop.

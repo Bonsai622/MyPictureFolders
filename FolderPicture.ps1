@@ -418,15 +418,183 @@ function Resolve-Folder([string] $path) {
 }
 
 function Select-Picture([string[]] $dirs) {
-    $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Title = if ($dirs.Count -eq 1) { "Choose a picture for `"$(Split-Path -Leaf $dirs[0])`"" }
-                 else { "Choose a picture for $($dirs.Count) folders" }
-    $dlg.Filter = 'Pictures|*.jpg;*.jpeg;*.jfif;*.png;*.bmp;*.gif;*.tif;*.tiff;*.ico|All files|*.*'
-    $dlg.InitialDirectory = $dirs[0]
-    $owner = New-Owner
-    try { $ok = $dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK }
-    finally { $owner.Dispose() }
-    if ($ok) { $dlg.FileName }
+  $dialog = New-Object System.Windows.Forms.Form
+  $dialog.Text = 'Choose a folder picture'
+  $dialog.ClientSize = New-Object System.Drawing.Size 780, 500
+  $dialog.MinimumSize = New-Object System.Drawing.Size 680, 460
+  $dialog.StartPosition = 'CenterScreen'
+  $dialog.TopMost = $true
+
+  $layout = New-Object System.Windows.Forms.TableLayoutPanel
+  $layout.Dock = 'Fill'
+  $layout.ColumnCount = 1
+  $layout.RowCount = 3
+  [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle 'Absolute', 38))
+  [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle 'Percent', 100))
+  [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle 'Absolute', 42))
+  $dialog.Controls.Add($layout)
+
+  $navigation = New-Object System.Windows.Forms.TableLayoutPanel
+  $navigation.Dock = 'Fill'
+  $navigation.ColumnCount = 4
+  foreach ($width in 50, 85) {
+    [void]$navigation.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle 'Absolute', $width))
+  }
+  [void]$navigation.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle 'Percent', 100))
+  [void]$navigation.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle 'Absolute', 50))
+  $layout.Controls.Add($navigation, 0, 0)
+  $up = New-Object System.Windows.Forms.Button
+  $up.Text = 'Up'
+  $pictures = New-Object System.Windows.Forms.Button
+  $pictures.Text = 'Pictures'
+  $address = New-Object System.Windows.Forms.TextBox
+  $address.Dock = 'Fill'
+  $address.AccessibleName = 'Picture folder path'
+  $go = New-Object System.Windows.Forms.Button
+  $go.Text = 'Go'
+  $navigation.Controls.Add($up, 0, 0)
+  $navigation.Controls.Add($pictures, 1, 0)
+  $navigation.Controls.Add($address, 2, 0)
+  $navigation.Controls.Add($go, 3, 0)
+
+  $split = New-Object System.Windows.Forms.SplitContainer
+  $split.Dock = 'Fill'
+  $split.Width = 780
+  $split.SplitterDistance = 160
+  $layout.Controls.Add($split, 0, 1)
+  $folders = New-Object System.Windows.Forms.ListBox
+  $folders.Dock = 'Fill'
+  $folders.DisplayMember = 'Name'
+  $folders.AccessibleName = 'Subfolders'
+  $split.Panel1.Controls.Add($folders)
+  $gallery = New-Object System.Windows.Forms.ListView
+  $gallery.Dock = 'Fill'
+  $gallery.View = 'LargeIcon'
+  $gallery.MultiSelect = $false
+  $gallery.HideSelection = $false
+  $gallery.AccessibleName = 'Picture thumbnails'
+  $split.Panel2.Controls.Add($gallery)
+
+  $footer = New-Object System.Windows.Forms.FlowLayoutPanel
+  $footer.Dock = 'Fill'
+  $layout.Controls.Add($footer, 0, 2)
+  $previous = New-Object System.Windows.Forms.Button
+  $previous.Text = 'Previous'
+  $next = New-Object System.Windows.Forms.Button
+  $next.Text = 'Next'
+  $status = New-Object System.Windows.Forms.Label
+  $status.Width = 245
+  $status.TextAlign = 'MiddleLeft'
+  $open = New-Object System.Windows.Forms.Button
+  $open.Text = 'Open'
+  $cancel = New-Object System.Windows.Forms.Button
+  $cancel.Text = 'Cancel'
+  $cancel.DialogResult = 'Cancel'
+  $dialog.CancelButton = $cancel
+  $footer.Controls.AddRange(@($previous, $next, $status, $open, $cancel))
+
+  $state = @{ Path = ''; Files = @(); Offset = 0; Selection = $null }
+  $pageSize = 36
+  $showPage = {
+    $gallery.BeginUpdate()
+    try {
+      $gallery.Items.Clear()
+      $oldImages = $gallery.LargeImageList
+      $images = New-Object System.Windows.Forms.ImageList
+      $images.ImageSize = New-Object System.Drawing.Size 96, 84
+      $images.ColorDepth = 'Depth32Bit'
+      $null = $images.Handle
+      $gallery.LargeImageList = $images
+      if ($oldImages) { $oldImages.Dispose() }
+      $end = [Math]::Min($state.Offset + $pageSize, $state.Files.Count)
+      for ($index = $state.Offset; $index -lt $end; $index++) {
+        $file = $state.Files[$index]
+        $item = New-Object System.Windows.Forms.ListViewItem $file.Name
+        $item.Tag = $file.FullName
+        try {
+          $image = Get-OrientedImage $file.FullName
+          try {
+            $scale = [Math]::Min(96 / $image.Width, 84 / $image.Height)
+            $width = [Math]::Max(1, [int]($scale * $image.Width))
+            $height = [Math]::Max(1, [int]($scale * $image.Height))
+            $thumb = New-Object System.Drawing.Bitmap 96, 84
+            $graphics = [System.Drawing.Graphics]::FromImage($thumb)
+            try {
+              $graphics.InterpolationMode = 'HighQualityBicubic'
+              $graphics.DrawImage($image, [int]((96 - $width) / 2), [int]((84 - $height) / 2), $width, $height)
+            } finally { $graphics.Dispose() }
+            $images.Images.Add($thumb)
+            $thumb.Dispose()
+            $item.ImageIndex = $images.Images.Count - 1
+          } finally { $image.Dispose() }
+        } catch {
+          # Keep the filename visible even when its preview cannot be decoded.
+        }
+        [void]$gallery.Items.Add($item)
+      }
+      $previous.Enabled = $state.Offset -gt 0
+      $next.Enabled = $end -lt $state.Files.Count
+      $open.Enabled = $false
+      $status.Text = if ($end) { "Pictures $($state.Offset + 1)-$end of $($state.Files.Count)" }
+                     else { 'No pictures in this folder' }
+    } finally { $gallery.EndUpdate() }
+  }
+
+  $navigate = {
+    param([string] $path)
+    if (-not $path) { return }
+    try {
+      $folder = Get-Item -LiteralPath $path -ErrorAction Stop
+      if (-not $folder.PSIsContainer) { throw 'Choose a folder path.' }
+      $children = @(Get-ChildItem -LiteralPath $folder.FullName -ErrorAction Stop | Sort-Object Name)
+    } catch {
+      Show-Message "Could not open that picture folder:`n$($_.Exception.Message)" 'Error'
+      return
+    }
+    $state.Path = $folder.FullName
+    $state.Offset = 0
+    $state.Files = @($children | Where-Object { -not $_.PSIsContainer -and $_.Extension -match '^\.(jpe?g|jfif|png|bmp|gif|tiff?|ico)$' })
+    $address.Text = $state.Path
+    $folders.Items.Clear()
+    foreach ($child in $children) {
+      if ($child.PSIsContainer) { [void]$folders.Items.Add($child) }
+    }
+    $up.Enabled = [bool](Split-Path -Parent $state.Path)
+    & $showPage
+  }
+  $choose = {
+    if ($gallery.SelectedItems.Count) {
+      $state.Selection = [string]$gallery.SelectedItems[0].Tag
+      $dialog.DialogResult = 'OK'
+    }
+  }
+  $up.Add_Click({ & $navigate (Split-Path -Parent $state.Path) })
+  $pictures.Add_Click({ & $navigate ([Environment]::GetFolderPath('MyPictures')) })
+  $go.Add_Click({ & $navigate $address.Text })
+  $address.Add_KeyDown({
+    param($sender, $eventArgs)
+    if ($eventArgs.KeyCode -eq 'Enter') {
+      $eventArgs.SuppressKeyPress = $true
+      & $navigate $address.Text
+    }
+  })
+  $folders.Add_DoubleClick({ if ($folders.SelectedItem) { & $navigate $folders.SelectedItem.FullName } })
+  $previous.Add_Click({ $state.Offset -= $pageSize; & $showPage })
+  $next.Add_Click({ $state.Offset += $pageSize; & $showPage })
+  $gallery.Add_SelectedIndexChanged({ $open.Enabled = $gallery.SelectedItems.Count -gt 0 })
+  $gallery.Add_DoubleClick($choose)
+  $open.Add_Click($choose)
+  $dialog.AcceptButton = $open
+
+  try {
+    $initial = [Environment]::GetFolderPath('MyPictures')
+    if (-not $initial -or -not (Test-Path -LiteralPath $initial -PathType Container)) { $initial = $dirs[0] }
+    & $navigate $initial
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $state.Selection }
+  } finally {
+    if ($gallery.LargeImageList) { $gallery.LargeImageList.Dispose() }
+    $dialog.Dispose()
+  }
 }
 
 # Saves whatever picture is on the clipboard to a temporary PNG and returns its path.
