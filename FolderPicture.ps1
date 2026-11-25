@@ -375,7 +375,7 @@ function Write-DesktopIni([string] $iniPath, [string[]] $lines) {
 # that also cleans up the junk lines an earlier version of this script wrote.
 function Get-IniWithoutIcon([string] $iniPath) {
   $result = New-Object System.Collections.Generic.List[string]
-  $inSection = $false; $insertAt = -1
+  $inSection = $false; $insertAt = -1; $previousIcon = $null
   if (Test-Path -LiteralPath $iniPath) {
     foreach ($line in @(Get-Content -LiteralPath $iniPath -Force)) {
       $t = ([string]$line).Trim()
@@ -387,16 +387,21 @@ function Get-IniWithoutIcon([string] $iniPath) {
         continue
       }
       if ($t -and $t -notmatch '^;' -and $t -notmatch '=') { continue }   # junk
-      if ($inSection -and $t -match '^(IconResource|IconFile|IconIndex)\s*=') { continue }
+      if ($inSection -and $t -match '^(IconResource|IconFile)\s*=\s*(.+)$') {
+        $value = $Matches[2] -replace ',\s*0$', ''
+        $previousIcon = [System.IO.Path]::GetFileName($value.Trim().Trim('"'))
+        continue
+      }
+      if ($inSection -and $t -match '^IconIndex\s*=') { continue }
       $result.Add([string]$line)
     }
   }
-  [pscustomobject]@{ Lines = $result; InsertAt = $insertAt }
+  [pscustomobject]@{ Lines = $result; InsertAt = $insertAt; PreviousIcon = $previousIcon }
 }
 
-function Remove-OldIcons([string] $dir, [string] $keep) {
+function Remove-OldIcons([string] $dir, [string] $keep, [string] $previous) {
   Get-ChildItem -LiteralPath $dir -Force -File -Filter "$IconPrefix*.ico" -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -ne $keep } |
+    Where-Object { $_.Name -ne $keep -and $_.Name -ne $previous } |
     ForEach-Object {
       $_.Attributes = 'Normal'
       Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
@@ -638,15 +643,25 @@ function Get-ClipboardPicture {
 
 function Set-FolderPicture([string] $dir, [byte[]] $bytes) {
 
-  # A fresh file name every time - Explorer caches icons by path, so reusing a
-  # name would keep showing the old picture.
-  $iconName = $IconPrefix + [Guid]::NewGuid().ToString('N') + '.ico'
-  $iconPath = Join-Path $dir $iconName
-  [System.IO.File]::WriteAllBytes($iconPath, $bytes)
-  [System.IO.File]::SetAttributes($iconPath, [System.IO.FileAttributes]'Hidden, System')
-
   $iniPath = Join-Path $dir 'desktop.ini'
   $ini = Get-IniWithoutIcon $iniPath
+  $reused = $false
+  if ($ini.PreviousIcon -like "$IconPrefix*.ico") {
+    $oldPath = Join-Path $dir $ini.PreviousIcon
+    $oldFile = Get-Item -LiteralPath $oldPath -Force -ErrorAction SilentlyContinue
+    if ($oldFile -and $oldFile.Length -eq $bytes.Length) {
+      $reused = [Convert]::ToBase64String([IO.File]::ReadAllBytes($oldPath)) -ceq [Convert]::ToBase64String($bytes)
+    }
+  }
+  if ($reused) {
+    $iconName = $ini.PreviousIcon
+    $iconPath = $oldPath
+  } else {
+    $iconName = $IconPrefix + [Guid]::NewGuid().ToString('N') + '.ico'
+    $iconPath = Join-Path $dir $iconName
+    [System.IO.File]::WriteAllBytes($iconPath, $bytes)
+    [System.IO.File]::SetAttributes($iconPath, [System.IO.FileAttributes]'Hidden, System')
+  }
   # A relative IconFile works across drive mappings and UNC paths to the same share.
   $root = [System.IO.Path]::GetPathRoot($dir)
   $isNetwork = $dir.StartsWith('\\') -or
@@ -681,7 +696,8 @@ function Set-FolderPicture([string] $dir, [byte[]] $bytes) {
     throw "Windows could not keep the $folderFlag attribute on this folder:`n$dir"
   }
 
-  Remove-OldIcons $dir $iconName
+  # Explorer can still be displaying the previous icon after the write.
+  if (-not $reused) { Remove-OldIcons $dir $iconName $ini.PreviousIcon }
   Update-Explorer $dir -Network:$isNetwork
 }
 
