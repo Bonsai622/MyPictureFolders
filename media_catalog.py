@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 
 from PIL import Image, ImageOps
 
@@ -18,8 +19,33 @@ TASK = "MyPictureFolders hourly media scan"
 
 
 def person_name(name):
-    prefix = re.split(r"\d", name, maxsplit=1)[0]
-    return " ".join(re.sub(r"[-_.]+", " ", prefix).split())
+    prefix = re.split(r"\d", unicodedata.normalize("NFKC", name), maxsplit=1)[0]
+    # Folder names may use a typographic dash or open a bracket before the date.
+    prefix = "".join(" " if unicodedata.category(c) == "Pd" or c in "_." else c for c in prefix)
+    prefix = re.sub(r"(?<=[a-z])(?=[A-Z](?:[a-z]|$|[^\w]))", " ", prefix)
+    cleaned = " ".join(prefix.strip(" ()[]{}").split())
+    if cleaned.casefold().replace(" ", "") == "jodiegasson":
+        return "Jodie Gasson"
+    # Old sets often use all caps or all lowercase. Use a consistent display
+    # label while keeping initials distinct (Jo E and Joe are different keys).
+    return " ".join(word.capitalize() if word.isupper() or word.islower() else word
+                    for word in cleaned.split())
+
+
+def migrate_model_keys(db, table):
+    # Retain old keys as backups when two formerly separate covers converge.
+    with db:
+        if table == "model_covers":
+            for name, data in db.execute("SELECT model,settings FROM model_covers ORDER BY model").fetchall():
+                key = person_name(name).casefold()
+                if key and key != name:
+                    db.execute("INSERT OR IGNORE INTO model_covers VALUES(?,?)", (key,data))
+        else:
+            for (name,) in db.execute("SELECT name FROM favorites WHERE kind='model'").fetchall():
+                key = person_name(name).casefold()
+                if key and key != name:
+                    db.execute("INSERT OR IGNORE INTO favorites VALUES('model',?)", (key,))
+                    db.execute("DELETE FROM favorites WHERE kind='model' AND name=?", (name,))
 
 
 def connect(home):
@@ -56,6 +82,7 @@ def connect(home):
         if not option(db, "favorites_migrated"):
             db.execute("INSERT OR IGNORE INTO favorites SELECT 'folder',path FROM albums WHERE favorite=1")
             put(db, "favorites_migrated", "1")
+    migrate_model_keys(db, "favorites")
     return db
 
 
@@ -146,8 +173,12 @@ def index_folder(db, root):
     while stack:
         folder, person = stack.pop()
         db.execute("INSERT INTO seen_albums VALUES(?)", (str(folder),))
-        db.execute("INSERT OR IGNORE INTO albums(root,path,name,person) VALUES(?,?,?,?)",
+        db.execute("""INSERT INTO albums(root,path,name,person) VALUES(?,?,?,?)
+                   ON CONFLICT(root,path) DO UPDATE SET person=excluded.person
+                   WHERE albums.person IS NOT excluded.person COLLATE BINARY""",
                    (root,str(folder),folder.name,person))
+        db.execute("UPDATE media SET person=? WHERE root=? AND parent=? AND person IS NOT ? COLLATE BINARY",
+                   (person,root,str(folder),person))
         with os.scandir(folder) as entries:
             for entry in entries:
                 if entry.is_symlink():

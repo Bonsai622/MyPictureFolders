@@ -15,7 +15,7 @@ import tempfile
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
-from media_catalog import connect, person_name, set_favorite, show_catalog
+from media_catalog import connect, migrate_model_keys, person_name, set_favorite, show_catalog
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 META = ".mypicturefolders.json"
@@ -159,6 +159,7 @@ class Browser:
         self.db = sqlite3.connect(storage / "library.sqlite")
         self.db.execute("CREATE TABLE IF NOT EXISTS folders(path TEXT PRIMARY KEY COLLATE NOCASE)")
         self.db.execute("CREATE TABLE IF NOT EXISTS model_covers(model TEXT PRIMARY KEY, settings TEXT NOT NULL)")
+        migrate_model_keys(self.db, "model_covers")
         self.folder = None
         self.page = 0
         self.favorite_db = connect(storage)
