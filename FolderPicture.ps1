@@ -80,6 +80,11 @@ function Update-Explorer([string] $dir) {
     [FolderPicture.Shell]::SHChangeNotify($SHCNE_UPDATEDIR, $SHCNF_PATHW -bor $SHCNF_FLUSH, $parent, [IntPtr]::Zero)
   }
   [FolderPicture.Shell]::SHChangeNotify($SHCNE_ASSOCCHANGED, 0, [IntPtr]::Zero, [IntPtr]::Zero)
+  # Ask Windows to refresh its icon cache as well.
+  $ie4 = Join-Path $env:SystemRoot 'System32\ie4uinit.exe'
+  if (Test-Path -LiteralPath $ie4) {
+    try { Start-Process -FilePath $ie4 -ArgumentList '-show' -WindowStyle Hidden -Wait } catch { }
+  }
 }
 
 # ------------------------------------------------------------------ icon building
@@ -177,10 +182,6 @@ function New-IconBytes([System.Drawing.Image] $img) {
 
 # ------------------------------------------------------------------ desktop.ini
 
-function Read-DesktopIni([string] $iniPath) {
-  if (Test-Path -LiteralPath $iniPath) { @(Get-Content -LiteralPath $iniPath) } else { @() }
-}
-
 function Write-DesktopIni([string] $iniPath, [string[]] $lines) {
   if (Test-Path -LiteralPath $iniPath) {
     # desktop.ini is normally Hidden+System, which blocks overwriting it.
@@ -190,23 +191,30 @@ function Write-DesktopIni([string] $iniPath, [string[]] $lines) {
   [System.IO.File]::SetAttributes($iniPath, [System.IO.FileAttributes]'Hidden, System')
 }
 
-# Returns the lines with icon settings removed from [.ShellClassInfo], and the
-# index just after that section's header (or -1 if there is no such section).
-function Remove-IconLines([string[]] $lines) {
+# Reads desktop.ini with the icon settings taken out of [.ShellClassInfo].
+# Returns an object (not a bare array, which PowerShell would unroll) holding the
+# remaining lines and the index just after the [.ShellClassInfo] header (-1 if none).
+# Stray lines that are neither a setting, a section header nor a comment are dropped -
+# that also cleans up the junk lines an earlier version of this script wrote.
+function Get-IniWithoutIcon([string] $iniPath) {
   $result = New-Object System.Collections.Generic.List[string]
   $inSection = $false; $insertAt = -1
-  foreach ($line in $lines) {
-    $t = $line.Trim()
-    if ($t -match '^\[.*\]$') {
-      $inSection = $t -ieq '[.ShellClassInfo]'
-      $result.Add($line)
-      if ($inSection -and $insertAt -lt 0) { $insertAt = $result.Count }
-      continue
+  if (Test-Path -LiteralPath $iniPath) {
+    foreach ($line in @(Get-Content -LiteralPath $iniPath -Force)) {
+      $t = ([string]$line).Trim()
+      if ($t -match '^\[.*\]$') {
+        $inSection = $t -ieq '[.ShellClassInfo]'
+        if ($inSection -and $insertAt -ge 0) { continue }   # duplicate header
+        $result.Add($t)
+        if ($inSection) { $insertAt = $result.Count }
+        continue
+      }
+      if ($t -and $t -notmatch '^;' -and $t -notmatch '=') { continue }   # junk
+      if ($inSection -and $t -match '^(IconResource|IconFile|IconIndex)\s*=') { continue }
+      $result.Add([string]$line)
     }
-    if ($inSection -and $t -match '^(IconResource|IconFile|IconIndex)\s*=') { continue }
-    $result.Add($line)
   }
-  , @($result.ToArray(), $insertAt)
+  [pscustomobject]@{ Lines = $result; InsertAt = $insertAt }
 }
 
 function Remove-OldIcons([string] $dir, [string] $keep) {
@@ -258,14 +266,16 @@ function Set-FolderPicture([string] $dir, [string] $file) {
   [System.IO.File]::SetAttributes($iconPath, [System.IO.FileAttributes]'Hidden, System')
 
   $iniPath = Join-Path $dir 'desktop.ini'
-  $lines, $insertAt = Remove-IconLines (Read-DesktopIni $iniPath)
-  $entry = "IconResource=$iconName,0"
-  if ($insertAt -ge 0) {
-    $lines = @($lines[0..($insertAt - 1)]) + $entry + @(if ($insertAt -lt $lines.Count) { $lines[$insertAt..($lines.Count - 1)] })
+  $ini = Get-IniWithoutIcon $iniPath
+  # Full path, the same way Windows' own Properties > Customize > Change Icon writes it.
+  $entry = "IconResource=$iconPath,0"
+  if ($ini.InsertAt -ge 0) {
+    $ini.Lines.Insert($ini.InsertAt, $entry)
   } else {
-    $lines = @('[.ShellClassInfo]', $entry) + @($lines)
+    $ini.Lines.Insert(0, $entry)
+    $ini.Lines.Insert(0, '[.ShellClassInfo]')
   }
-  Write-DesktopIni $iniPath $lines
+  Write-DesktopIni $iniPath $ini.Lines.ToArray()
 
   # Explorer only reads desktop.ini on folders marked ReadOnly or System.
   # (ReadOnly on a folder does not make its files read-only.)
@@ -279,7 +289,7 @@ function Set-FolderPicture([string] $dir, [string] $file) {
 function Remove-FolderPicture([string] $dir) {
   $iniPath = Join-Path $dir 'desktop.ini'
   if (Test-Path -LiteralPath $iniPath) {
-    $lines, $null = Remove-IconLines (Read-DesktopIni $iniPath)
+    $lines = (Get-IniWithoutIcon $iniPath).Lines.ToArray()
     $meaningful = $lines | Where-Object { $_.Trim() -and $_.Trim() -notmatch '^\[.*\]$' }
     if ($meaningful) {
       Write-DesktopIni $iniPath $lines

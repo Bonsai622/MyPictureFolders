@@ -37,8 +37,8 @@ Then double-click **`Install Folder Picture Menu.cmd`** again.
 - The whole picture is shown, centred in the icon — nothing is cropped off.
 - Your original picture is never changed. A small hidden `folder-picture-….ico` and the
   usual hidden `desktop.ini` are saved inside the folder — the same mechanism as
-  Properties → Customize → Change Icon — so the picture stays with the folder if you move
-  or copy it.
+  Properties → Customize → Change Icon. Like Windows' own setting, it records the icon's
+  full path, so if you move or rename the folder, set the picture again.
 - Drives (like `C:\`) can't be given a picture — only folders.
 - To take the menus away, run **`Uninstall Folder Picture Menu.cmd`**. Folders that already
   have a picture keep it.
