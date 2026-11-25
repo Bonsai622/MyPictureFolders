@@ -100,6 +100,32 @@ function Get-OrientedImage([string] $file) {
   $img
 }
 
+# A 32-bit icon bitmap: BITMAPINFOHEADER (height doubled for the mask), BGRA rows
+# bottom-up, then an all-zero AND mask (transparency comes from the alpha channel).
+function ConvertTo-IconDib([System.Drawing.Bitmap] $bmp) {
+  $n = $bmp.Width
+  $rect = New-Object System.Drawing.Rectangle 0, 0, $n, $n
+  $data = $bmp.LockBits($rect, 'ReadOnly', [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $stride = $n * 4
+  $pixels = New-Object byte[] ($stride * $n)
+  for ($y = 0; $y -lt $n; $y++) {
+    [System.Runtime.InteropServices.Marshal]::Copy([IntPtr]($data.Scan0.ToInt64() + $y * $data.Stride), $pixels, $y * $stride, $stride)
+  }
+  $bmp.UnlockBits($data)
+
+  $maskRow = [int][Math]::Ceiling($n / 32) * 4
+  $ms = New-Object System.IO.MemoryStream
+  $bw = New-Object System.IO.BinaryWriter $ms
+  $bw.Write([UInt32]40); $bw.Write([Int32]$n); $bw.Write([Int32]($n * 2))
+  $bw.Write([UInt16]1); $bw.Write([UInt16]32); $bw.Write([UInt32]0)
+  $bw.Write([UInt32]($stride * $n + $maskRow * $n))
+  $bw.Write([Int32]0); $bw.Write([Int32]0); $bw.Write([UInt32]0); $bw.Write([UInt32]0)
+  for ($y = $n - 1; $y -ge 0; $y--) { $bw.Write($pixels, $y * $stride, $stride) }
+  $bw.Write((New-Object byte[] ($maskRow * $n)))
+  $bw.Flush()
+  $ms.ToArray()
+}
+
 function New-IconBytes([System.Drawing.Image] $img) {
   $pngs = foreach ($size in $Sizes) {
     $bmp = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -118,13 +144,21 @@ function New-IconBytes([System.Drawing.Image] $img) {
     $dest = New-Object System.Drawing.Rectangle ([int](($size - $w) / 2)), ([int](($size - $h) / 2)), $w, $h
     $g.DrawImage($img, $dest, 0, 0, $img.Width, $img.Height, [System.Drawing.GraphicsUnit]::Pixel, $attrs)
     $g.Dispose(); $attrs.Dispose()
-    $ms = New-Object System.IO.MemoryStream
-    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-    $bmp.Dispose()
-    , $ms.ToArray()
+    if ($size -ge 256) {
+      # 256px entry: PNG-compressed, as Windows' own icons do.
+      $ms = New-Object System.IO.MemoryStream
+      $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+      $bmp.Dispose()
+      , $ms.ToArray()
+    } else {
+      # Smaller entries: classic uncompressed bitmap, which every part of Explorer reads.
+      $dib = ConvertTo-IconDib $bmp
+      $bmp.Dispose()
+      , $dib
+    }
   }
 
-  # ICO container with PNG-compressed entries (supported since Windows Vista).
+  # ICO container: header, one directory entry per size, then the image data.
   $out = New-Object System.IO.MemoryStream
   $bw = New-Object System.IO.BinaryWriter $out
   $bw.Write([UInt16]0); $bw.Write([UInt16]1); $bw.Write([UInt16]$Sizes.Count)
